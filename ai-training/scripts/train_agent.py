@@ -623,6 +623,11 @@ def main():
                         help="Phase 2.2: multiply the TRAINING fee to force selectivity "
                              "(e.g. 3.0 = train at 3x fees). Validation/test always use the "
                              "real fee, so reported edge reflects true deployment economics.")
+    parser.add_argument("--min-adx", type=float, default=None,
+                        help="Phase 2.3: regime gate. Block opening positions when raw ADX "
+                             "is below this (e.g. 25 = only trade trending markets). Applies "
+                             "to BOTH training and validation/test so the gate is part of the "
+                             "deployed policy. Skip out the chop where the model loses.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -634,6 +639,11 @@ def main():
         ENV_CONFIG["candles_per_day"] = args.candles_per_day
         print(f"[CONFIG] candles_per_day overridden → {args.candles_per_day} "
               f"({'15m' if args.candles_per_day==96 else '1h' if args.candles_per_day==24 else '5m' if args.candles_per_day==288 else 'custom'})")
+
+    # Phase 2.3: regime gate applied to ALL envs (train + validation/test) via ENV_CONFIG.
+    if args.min_adx is not None:
+        ENV_CONFIG["min_adx"] = args.min_adx
+        print(f"[CONFIG] regime gate ON → only open positions when raw ADX >= {args.min_adx}")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")

@@ -166,6 +166,7 @@ class TradingEnv(gym.Env):
         position_fraction:  float = 0.20,
         domain_randomization: bool = False,
         candles_per_day:    int   = 96,      # Fix 1: explicit timeframe param for Sharpe
+        min_adx:            float = None,    # Phase 2.3: regime gate (raw ADX threshold)
     ):
         super().__init__()
 
@@ -178,6 +179,7 @@ class TradingEnv(gym.Env):
         self.reward_scaling  = reward_scaling
         self.position_fraction = np.clip(position_fraction, 0.01, 1.0)
         self.domain_randomization = domain_randomization
+        self.min_adx         = min_adx
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -226,6 +228,18 @@ class TradingEnv(gym.Env):
             self.df[self._active_features].values.astype(np.float32),
             nan=0.0,
         )
+
+        # ── Phase 2.3: regime gate precompute ────────────────────────────────
+        # The 'adx' feature is stored normalized as (adx_raw - 25) / 25, clipped
+        # to [-1, 1]. To gate on a raw ADX threshold we convert it to the same
+        # normalized units once. When the agent tries to OPEN a position while
+        # ADX is below this, the BUY is remapped to HOLD (sit out the chop).
+        self._adx_gate_norm = None
+        if self.min_adx is not None and "adx" in self.df.columns:
+            self._adx_values    = self.df["adx"].values.astype(np.float64)  # normalized
+            self._adx_gate_norm = (self.min_adx - 25.0) / 25.0
+        else:
+            self._adx_values = None
 
         self._reset_state()
 
@@ -335,6 +349,20 @@ class TradingEnv(gym.Env):
             self._reward_components["invalid_action_count"] += 1
         else:
             action = raw_action
+
+        # ── Phase 2.3: Regime Gate ────────────────────────────────────────────
+        # Block NEW entries when the market is not trending (ADX below threshold).
+        # The model has edge in trends and bleeds in chop (consistent across the
+        # whole project history) — so we simply forbid opening a position when
+        # ADX is low. Exits and stop-losses are never gated.
+        if (action == Action.BUY and not self.position_held
+                and self._adx_gate_norm is not None):
+            idx = min(self.current_step, len(self._adx_values) - 1)
+            if self._adx_values[idx] < self._adx_gate_norm:
+                action = Action.HOLD
+                reward_tag = "regime_gated"
+                self._reward_components["regime_gated_count"] = \
+                    self._reward_components.get("regime_gated_count", 0) + 1
 
         # ── Experiment E: Hard Stop-Loss ──────────────────────────────────────
         # Force a SELL if the position drops 2.5% below entry.

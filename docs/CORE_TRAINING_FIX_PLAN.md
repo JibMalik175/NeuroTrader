@@ -116,6 +116,28 @@ fees out-of-sample (+0.06%/trade vs 0.20% round-trip), AND it's regime-sensitive
   3. **Regime-gating:** the edge lives in trending regimes (consistent across project history). Only trade when ADX/volatility says the model is in its competence zone.
 Fee-multiplier sweeps and reward shaping are EXHAUSTED — stop tuning them.
 
+| 06-09 | p2_3_regime25 | 1h + `--min-adx 25` regime gate (200k) | VAL: **best & most stable yet** — gross PF 1.626 (highest), net PF 0.975, gExp +0.185%, **54 trades**, **Sharpe std 0.40** (lowest). TEST: gross PF 0.847, net −1.70%. | ✅ keep gating; make it DIRECTIONAL |
+
+**KEY REFRAME (06-09) — the test set is a −34% bear crash.** Measured: TEST(2026)
+buy&hold = **−34.0%** (maxDD 38.8%) vs VAL buy&hold −10.5%. We were judging a
+**long-only** bot on an unwinnable −34% market. On it, the regime model lost only
+**−1.7%** (98% HOLD) — i.e. it **beat buy-and-hold by ~32 pts** by sitting out the
+crash. The model is NOT broken; the test bar was impossible for long-only.
+
+**Flaw in ADX-only gate:** ADX = trend STRENGTH, not direction. In the 2026 bear,
+most ADX>25 bars were strong DOWNtrends, and the gate let the agent open LONGS into
+them (source of the −1.7%). Fix = **directional gate**: long only when ADX strong AND
+price uptrend (macro_trend_sma>0 or ema_cross_long>0) → sits flat in bears.
+
+**Two clear paths from here:**
+  1. **Directional regime gate (Phase 2.3b, cheap):** ADX strong AND uptrend. Keeps the
+     long-only model FLAT (≈0% loss) in bear/down regimes, long only in confirmed uptrends.
+     Expected to turn the 2026 −1.7% toward ~0 and lift validation net PF past 1.0.
+  2. **Add shorting (Phase 2.4, bigger):** long/short env so the bot can PROFIT in bear
+     markets like the 2026 test. Now strongly justified — a long-only bot leaves all the
+     −34% downside on the table. The real unlock for all-weather profitability.
+Also: judge models vs buy-and-hold per regime, not absolute return on a bear test.
+
 **Quantified target (post-1h):** gross expectancy/trade **+0.063%** vs round-trip fee **0.20%**. Need edge/trade > fee. Levers: fee-amplified training (Phase 2.2, `--fee-multiplier`), BNB discount (0.20%→0.15%), fewer/higher-conviction trades.
 
 **Speed note:** env fix gave 53× on raw env, but real training throughput only ~1.5× (113→~160 it/s) because the LSTM + per-step info plumbing became the new ceiling. Phase 0.5 (gate per-step info dicts to terminal) applied; re-time expected closer to the 476 it/s bench.
