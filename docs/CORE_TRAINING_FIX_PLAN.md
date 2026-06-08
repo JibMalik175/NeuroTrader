@@ -99,7 +99,22 @@ Each step is a tracked A/B vs the 15m FIX-B baseline.
 | 06-08 | p2_tf1h | 15m → 1h timeframe (200k, RecurrentPPO) | **gross PF 1.006→1.15, net PF 0.55→0.83, gross expectancy now +0.063%/trade (was ~0)**. Still net-neg: fee 0.20%/trade = 3.2× edge. | ✅ keep 1h; need selectivity |
 | 06-08 | p2_fee3x | 1h + `--fee-multiplier 3.0` (200k) | **VAL: first-ever net profit — net PF 1.268, net expectancy +0.054%/trade, gross expectancy +0.254% clears the 0.20% fee. 17 trades, 46c holds.** TEST: collapsed to 10 trades, gross −1.77%, 33% win — too selective + small-sample noise (Sharpe std ±4.4). | ⚠️ mechanism proven; 3× overshoots. Try 2× |
 
-**Phase 2.2 verdict:** Fee-amplified training WORKS — it's the first lever to push gross expectancy/trade past the fee on validation. But 3× throttles trading too hard to survive the small/recent test regime. Next: `p2_fee2x` (--fee-multiplier 2.0) to find the sweet spot (~25-30 trades, still clearing fees). Then consider 300-500k steps + 3 windows for policy stability/generalization, since 10-17 trade evaluations are statistically unreliable (the project's persistent regime-sensitivity + sample-size problem).
+| 06-09 | p2_fee2x | 1h + `--fee-multiplier 2.0` (200k) | VAL: net PF 0.816, gExp +0.057% (below fee bar), 29 trades. TEST: gross PF 0.421, gExp −0.60%, net −1.75%, 15 trades. | ❌ overfits |
+
+**Phase 2.2 FINAL VERDICT — fee amplification OVERFITS (abandon this lever).**
+Across 1×/2×/3×, VALIDATION improves monotonically (net PF 0.75→0.82→1.27) while
+TEST degrades monotonically (gross PF 1.15→0.42→noise; net −0.74→−1.75→−2.07).
+That divergence = textbook overfitting. The "net-profitable validation" at 3× was a
+mirage. **Plain 1h (no fee amp) is the best generalizer** — the only config with a
+positive gross edge out-of-sample (test gross PF 1.15, gExp +0.063%).
+
+**Re-framed core problem (proven):** the gross edge is real but ~3× too small to clear
+fees out-of-sample (+0.06%/trade vs 0.20% round-trip), AND it's regime-sensitive
+(val/test disagree). No fee/reward knob closes this. Remaining real levers:
+  1. **Lower the fee to reality:** BNB discount → 0.15% round-trip (account-dependent). Train/eval at the true deployment fee.
+  2. **Strengthen/stabilize the edge:** longer training (400-500k) on plain 1h; more/longer data (Binance BTC goes back to 2017, we only use 2022+).
+  3. **Regime-gating:** the edge lives in trending regimes (consistent across project history). Only trade when ADX/volatility says the model is in its competence zone.
+Fee-multiplier sweeps and reward shaping are EXHAUSTED — stop tuning them.
 
 **Quantified target (post-1h):** gross expectancy/trade **+0.063%** vs round-trip fee **0.20%**. Need edge/trade > fee. Levers: fee-amplified training (Phase 2.2, `--fee-multiplier`), BNB discount (0.20%→0.15%), fewer/higher-conviction trades.
 
