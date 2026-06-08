@@ -1,0 +1,54 @@
+# ═══════════════════════════════════════════════════════════
+#  TradeBot — .gitignore
+# ═══════════════════════════════════════════════════════════
+
+# ── Node.js ────────────────────────────────────────────────
+node_modules/
+dist/
+.next/
+out/
+
+# ── Environment / Secrets ──────────────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+
+# ── AI Models + data (large, regenerable binaries) ─────────
+# NOTE: patterns are EXTENSION-based (unanchored) so they match at ANY depth,
+# e.g. ai-training/models/*.zip and ai-training/data/*.parquet. Anchored patterns
+# like "models/*.zip" only match the repo root and silently miss nested dirs.
+*.onnx
+*.zip
+*.pkl
+*.parquet
+*.h5
+# models/*_training_log.json is intentionally KEPT (small, valuable run history).
+
+# ── Stray/other venvs ──────────────────────────────────────
+train.venv/
+
+# ── Debug / training artifacts ─────────────────────────────
+debug-*.log
+
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.egg-info/
+
+# ── Logs ───────────────────────────────────────────────────
+logs/
+*.log
+
+# ── OS / IDE ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+.idea/
+
+# ── Coverage / Testing ─────────────────────────────────────
+coverage/
+.nyc_output/

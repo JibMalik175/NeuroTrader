@@ -1,0 +1,31 @@
+[
+  {
+    "window": 1,
+    "sharpe": -2.3493,
+    "total_return_pct": -4.5833,
+    "total_trades": 78.0,
+    "win_rate_pct": 48.31,
+    "avg_win_pct": 1.2111,
+    "avg_loss_pct": -1.3142,
+    "profit_factor": 0.9217,
+    "sharpe_ratio": -2.3493,
+    "max_drawdown_pct": 6.793,
+    "avg_hold_candles": 100.5667,
+    "sharpe_std": 1.7096,
+    "n_val_slices": 3,
+    "action_distribution": {
+      "0": 8487,
+      "1": 78,
+      "2": 73
+    },
+    "reward_components": {
+      "mark_to_market": -0.05640887067826631,
+      "fee_cost": -0.02849132582324896,
+      "invalid_action": -0.02,
+      "drawdown_penalty": 0.0,
+      "terminal_penalty": 0.0,
+      "winner_exit": 0.03166666666666668,
+      "early_exit_penalty": -0.008
+    }
+  }
+]

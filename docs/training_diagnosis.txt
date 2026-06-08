@@ -1,0 +1,871 @@
+================================================================================
+  TRAINING DIAGNOSIS — tradebot_ppo_15m_v4
+  Full audit of Window 1 + Window 2 results + root cause analysis
+  Date: 2026-06-01
+================================================================================
+
+SUMMARY OF RESULTS
+──────────────────
+                    Window 1        Window 2        Target
+  Sharpe            -63.3 ±6.9      -76.6           > +1.0
+  Return            -50.1%          -51.0%          > 0%
+  Win Rate          41.2%           41.2% (est)     > 48%
+  Total Trades      1,461           ~1,500+         < 400
+  Avg Hold          2.2 candles     1.6 candles     > 10 candles
+  Max Drawdown      50.01%          50.02%          < 25%
+  Replay Ratio      ~69×            ~11×            < 50×
+
+
+================================================================================
+  FINDING 1 — THE MATHEMATICAL PROOF OF EXPLOITATION (ROOT CAUSE)
+================================================================================
+
+Read these two numbers from Rollout 180 (end of Window 1 training):
+
+  winner_exit:  +1.7696
+  fee_cost:     -1.0200
+
+  Ratio: 1.7696 / 1.0200 = 1.73
+
+The model earns 73% MORE from winner_exit bonuses than it pays in fees.
+This is a mathematically guaranteed exploit. The optimal policy is:
+  1. Open a trade
+  2. Wait 1-2 candles for any positive tick
+  3. Close for the winner_exit bonus
+  4. Pay the fee (irrelevant — bonus exceeds fee)
+  5. Repeat as fast as possible
+
+On training data this works because the LSTM memorized when these
+1-2 candle gains occur. On validation data the micro-moves are random
+noise so the bonus fires unreliably, but the fee charges every time.
+Result: identical bleed-out on every validation run.
+
+PROOF: fee_cost grew from -0.23 (Rollout 10) to -1.02 (Rollout 180).
+The model learned to trade MORE as training progressed, not less.
+A correctly incentivized model does the opposite.
+
+
+================================================================================
+  FINDING 2 — AVG HOLD GOT WORSE FROM WINDOW 1 TO WINDOW 2
+================================================================================
+
+  Window 1 avg hold: 2.2 candles
+  Window 2 avg hold: 1.6 candles  ← GETTING SHORTER
+
+Window 2 has 2× more data and a 6× better replay ratio (11× vs 69×).
+By the other AI's logic, it should generalize better. Instead, avg hold
+got 27% shorter. This tells you the problem is NOT the replay ratio.
+
+The model converges to the winner_exit exploit FASTER on Window 2 because:
+  - More data → more examples of the 1-2 candle patterns
+  - Lower replay ratio → less memorization, but the exploit is structural
+  - The reward function itself is the bug, not the data quantity
+
+This is the most important observation the other AI missed. Replay ratio
+was a red herring. You could fetch 10 years of data and the model would
+still converge to 1.6-candle avg holds because winner_exit > fee_cost.
+
+
+================================================================================
+  FINDING 3 — MAX DRAWDOWN HITTING EXACTLY 50.01% IN BOTH WINDOWS
+================================================================================
+
+  Window 1: 50.01%
+  Window 2: 50.02%
+  Kill threshold: 50.00%
+
+Both models are running to the absolute edge of the drawdown limit on
+every validation episode. This is not coincidence.
+
+What is happening: the model is opening large positions (20% of balance)
+and holding them across sequences it memorized during training. When the
+validation data doesn't match the memorized sequence, the position moves
+against it. The model has no learned behavior for cutting losses because:
+  (a) early-exit penalty does not exist in the reward function
+  (b) stop-loss in the env only fires at max_drawdown_pct (50%), too late
+  (c) winner_exit incentivizes staying in positions hoping for a recovery
+
+The model rides losses to the kill switch. Every validation episode.
+
+
+================================================================================
+  FINDING 4 — ENTROPY COLLAPSED TOO FAST
+================================================================================
+
+  Rollout 10:   Entropy -1.031
+  Rollout 180:  Entropy -0.484
+
+Entropy halved over training. By Rollout 180 the policy is very
+deterministic — it has high confidence about exactly which candles
+trigger the winner_exit bonus. This is memorization, not learning.
+
+For comparison, a healthy crypto trading LSTM on unseen data should
+maintain entropy around -0.8 to -1.2 throughout training because
+markets are noisy and the correct action is genuinely uncertain.
+
+The fast entropy collapse is diagnostic of overfitting to a specific
+exploit, not of learning a generalizable strategy.
+
+
+================================================================================
+  FINDING 5 — INVALID_ACTION STILL 16% AT TRAINING END
+================================================================================
+
+  Rollout 10:   invalid_action -1.32 (≈33% of actions invalid)
+  Rollout 180:  invalid_action -0.36 (≈16% still invalid)
+
+The model reduced invalid actions from 33% to 16% — good progress.
+But 16% is still extremely high. A well-trained LSTM on 22,000-step
+episodes should have essentially zero invalid actions because the
+recurrent hidden state fully tracks position.
+
+Two possible causes:
+  (a) The position_held observation feature is not prominent enough
+      for the LSTM to reliably learn position state
+  (b) The -0.001 invalid_action penalty is too small to motivate
+      the model to eliminate them (costs 0.001, doesn't block the trade)
+
+Recommendation: increase invalid_action penalty from -0.001 to -0.005
+and add position_held as a repeated feature (3 copies) in the obs vector.
+
+
+================================================================================
+  FINDING 6 — THE V4 FEATURE SILENT IGNORE BUG (Other AI: Correct)
+================================================================================
+
+The other AI is correct about this. If trading_env.py's observation
+constructor only checks for V3 feature column names, macro features
+(dist_from_high, macro_trend_sma, macro_obv_ratio, etc.) added by
+feature_engineering.py --version v4 will be silently dropped.
+
+The env won't raise an error — it simply doesn't include those columns
+in the observation vector. The model trains on 24 features instead of
+the expected 28–32. This is a silent data bug.
+
+Status: SECONDARY ISSUE. Even with all features, the reward exploitation
+problem means the model won't use them productively. Fix reward first.
+
+
+================================================================================
+  FINDING 7 — WINDOW 2 SHARPE WORSE THAN WINDOW 1 DESPITE BETTER REPLAY
+================================================================================
+
+  Window 1: Sharpe -63.3 (replay 69×, 43K rows)
+  Window 2: Sharpe -76.6 (replay 11×, 87K rows)
+
+A lower replay ratio should produce better generalization. Instead,
+Window 2 is 21% worse. This is the clearest possible evidence that
+replay ratio is not the primary cause. The reward function exploit is.
+
+Additional factor: Window 2 training data includes 2022 bear market.
+The validation set may include a different regime (2024 bull). The model
+trained on one regime and validated on another — structural regime drift.
+
+
+================================================================================
+  EXACT CODE FIXES — trading_env.py
+================================================================================
+
+================================================================================
+  ADDITIONAL FINDINGS FROM FULL ENVIRONMENT AUDIT (2026-06-01)
+================================================================================
+
+These findings were derived from direct inspection of trading_env.py and
+identify several implementation-level issues that are not covered in the
+original diagnosis.
+
+================================================================================
+  FINDING 8 — SELL REWARD CALCULATION BUG (CRITICAL)
+================================================================================
+
+Inside SELL:
+
+    self.position_size = 0.0
+
+is executed BEFORE reward is calculated:
+
+    reward = price_change_pct * self.position_size
+
+This means:
+
+    reward = price_change_pct * 0.0 = 0.0
+
+for every SELL action.
+
+The code comment says:
+
+    "SELL gets the final incremental mark-to-market reward"
+
+but the implementation does not actually do that.
+
+Result:
+
+  HOLD in a profitable position:
+      positive reward
+
+  SELL at the same price:
+      approximately zero reward
+
+Therefore the agent is structurally discouraged from closing positions.
+
+The only positive reward available at close is:
+
+    winner_exit += 0.001
+
+which increases the relative importance of the winner_exit exploit.
+
+Impact:
+  HIGH
+
+Recommendation:
+  Calculate SELL reward before resetting position_size, or store:
+
+      old_position_size = self.position_size
+
+  and use that value in reward calculation.
+
+
+================================================================================
+  FINDING 9 — PORTFOLIO ACCOUNTING IS NOT SELF-CONSISTENT
+================================================================================
+
+Current implementation:
+
+ENTRY:
+    balance -= entry_fee
+
+Position capital remains inside balance.
+
+OPEN POSITION VALUE:
+
+    portfolio_value =
+        balance +
+        position_cost_basis * unrealized_pnl_pct
+
+This means:
+
+  principal capital is never removed from balance
+  only unrealized PnL is added/subtracted
+
+Example:
+
+  Initial balance = 10,000
+  Allocate 20%
+
+Expected:
+  Cash      = 8,000
+  Position  = 2,000
+
+Current:
+  Balance   ≈ 9,998
+  Position tracked separately
+
+Portfolio value calculations therefore do not represent a true cash +
+position accounting model.
+
+Consequences:
+
+  • drawdown estimates become distorted
+  • Sharpe calculation uses distorted equity values
+  • reward signal no longer exactly matches portfolio performance
+  • portfolio return statistics are biased
+
+Impact:
+  HIGH
+
+Recommendation:
+
+Use proper accounting:
+
+ENTRY:
+    balance -= cash_allocated
+
+MARK TO MARKET:
+    portfolio_value =
+        balance + current_position_value
+
+EXIT:
+    balance += net_proceeds
+
+
+================================================================================
+  FINDING 10 — SHARPE RATIO MAY STILL BE MISLEADING
+================================================================================
+
+Fix 1 correctly moved Sharpe calculation from trade-level returns to
+equity-curve returns.
+
+However:
+
+    equity_curve uses _get_portfolio_value()
+
+and _get_portfolio_value() currently uses the accounting model described
+in Finding 9.
+
+Therefore Sharpe is mathematically consistent with the environment's
+internal accounting, but not necessarily with true portfolio returns.
+
+This may partially explain the extremely negative Sharpe values observed
+during validation.
+
+Impact:
+  MEDIUM-HIGH
+
+Recommendation:
+
+Fix portfolio accounting first, then regenerate all benchmark Sharpe
+numbers before drawing conclusions from absolute Sharpe magnitudes.
+
+
+================================================================================
+  FINDING 11 — DRAWDOWN PENALTY IS NOW VERY WEAK
+================================================================================
+
+Current code:
+
+    if drawdown > 0.25:
+        dd_penalty = (drawdown - 0.25) * 0.002
+
+At 40% drawdown:
+
+    penalty = 0.0003 per step
+
+At 50% drawdown:
+
+    penalty = 0.0005 per step
+
+This is tiny compared to:
+
+    invalid action penalty = -0.001
+    winner_exit bonus      = +0.001
+
+The previous version was clearly too strong.
+
+The current version may be too weak.
+
+Evidence:
+
+    Validation DD consistently reaches ~50%.
+
+This suggests the drawdown penalty may no longer influence behavior
+until the terminal kill switch activates.
+
+Impact:
+  MEDIUM
+
+Recommendation:
+
+After reward exploit fixes are applied, re-evaluate whether drawdown
+penalties should scale more aggressively between:
+
+    25% DD → 50% DD
+
+instead of relying almost entirely on the terminal stop.
+
+
+================================================================================
+  FINDING 12 — POSITION_FRACTION + NO STOP-LOSS CREATES ASYMMETRIC RISK
+================================================================================
+
+Current configuration:
+
+    position_fraction = 20%
+    max_drawdown_pct  = 50%
+
+The agent can repeatedly enter positions without any explicit incentive
+to cut losses before the global drawdown limit.
+
+The environment currently rewards:
+
+    finding winners
+
+but does not explicitly reward:
+
+    preserving capital
+
+The only capital-preservation mechanism is:
+
+    drawdown penalty
+    terminal drawdown stop
+
+both of which activate late.
+
+Impact:
+  HIGH
+
+Recommendation:
+
+Introduce one of:
+
+  A) unrealized-loss penalty
+
+      reward -= f(unrealized_loss)
+
+  B) loss-duration penalty
+
+      penalize holding losing trades for extended periods
+
+  C) explicit stop-loss behavior reward
+
+so the model learns active risk management rather than relying on the
+global episode kill switch.
+
+
+================================================================================
+  FINDING 13 — INVALID ACTIONS ARE LIKELY A SYMPTOM, NOT THE ROOT CAUSE
+================================================================================
+
+The original diagnosis recommends increasing:
+
+    invalid_action penalty
+        -0.001 -> -0.005
+
+This is reasonable.
+
+However the persistent 16% invalid-action rate likely indicates that the
+policy is frequently oscillating between BUY and SELL decisions rather
+than truly forgetting position state.
+
+Evidence:
+
+    Avg hold:
+        2.2 candles
+        1.6 candles
+
+The policy is behaving like a rapid-fire scalp trader.
+
+In such a regime:
+
+    BUY while already long
+    SELL while flat
+
+naturally become common side effects.
+
+Therefore invalid actions may decrease automatically once the
+winner_exit exploit is removed and holding periods increase.
+
+Impact:
+  MEDIUM
+
+Recommendation:
+
+Treat invalid actions as a secondary diagnostic metric, not a primary
+optimization target.
+
+
+================================================================================
+  FINDING 14 — REWARD STRUCTURE STILL ENCOURAGES DIRECTIONAL PREDICTION,
+                NOT TRADE QUALITY
+================================================================================
+
+Current dense reward:
+
+    reward = price_change_pct * position_size
+
+This teaches:
+
+    "Was the next candle up or down?"
+
+It does NOT directly teach:
+
+    "Was entering this trade a good idea?"
+
+The agent is effectively solving a next-candle prediction problem.
+
+This tends to produce:
+
+    high trade frequency
+    low holding periods
+    weak risk-adjusted performance
+
+because every candle becomes a decision point.
+
+Impact:
+  HIGH
+
+Recommendation:
+
+Future environment versions should consider reward components tied to:
+
+    realized trade quality
+    trade expectancy
+    risk-adjusted return
+
+rather than relying almost exclusively on candle-to-candle movement.
+
+
+================================================================================
+  FINAL UPDATED ROOT CAUSE HIERARCHY
+================================================================================
+
+PRIMARY CAUSE
+-------------
+1. winner_exit exploitation
+2. lack of early-exit cost
+3. SELL reward implementation bug (zero reward after position reset)
+
+SECONDARY CAUSES
+----------------
+4. weak loss-cutting incentives
+5. distorted portfolio accounting
+6. drawdown penalty likely too weak after reduction
+7. V4 feature omission bug
+
+TERTIARY CAUSES
+---------------
+8. replay ratio effects
+9. entropy collapse
+10. invalid-action penalty size
+11. macro feature availability
+
+EXPECTED ORDER OF IMPACT
+------------------------
+
+Largest expected improvement:
+    Fix winner_exit exploit
+    +
+    Fix SELL reward bug
+
+Second largest:
+    Add early-exit penalties
+    +
+    Add loss-cutting incentives
+
+Third:
+    Correct portfolio accounting
+
+Only after those are fixed should replay ratio, feature expansion,
+entropy tuning, or hyperparameter tuning be considered major bottlenecks.
+
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 1 (CRITICAL): Duration-Scaled winner_exit Bonus
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: +0.001 flat bonus for any winning close, regardless of hold time.
+         Exploitable by 1-candle micro-scalps.
+
+CURRENT CODE (approximate):
+    if trade_closed and pnl_pct > 0:
+        reward += 0.001  # winner_exit
+
+FIXED CODE:
+    if trade_closed and pnl_pct > 0:
+        # Minimum hold for any bonus: 5 candles (~75 min on 15m)
+        # Maximum scaling at: 20 candles (~5 hours on 15m)
+        # Zero bonus for micro-scalps under 5 candles
+        MIN_HOLD_CANDLES = 5
+        MAX_HOLD_CANDLES = 20
+        hold_scale = max(0.0, min(1.0,
+            (held_steps - MIN_HOLD_CANDLES) /
+            (MAX_HOLD_CANDLES - MIN_HOLD_CANDLES)
+        ))
+        # Scale from 0 (held 5 candles) to +0.005 (held 20+ candles)
+        # This makes winner_exit worth 5× fee_cost only for patient trades
+        winner_exit_bonus = 0.005 * hold_scale
+        reward += winner_exit_bonus
+        self._reward_components["winner_exit"] += winner_exit_bonus
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 2 (CRITICAL): Early-Exit Penalty
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: No direct cost for closing a trade in 1-2 candles.
+         The model treats micro-scalping as free.
+
+ADD after trade_closed logic:
+    if trade_closed:
+        if held_steps < 5:
+            # Hard penalty for micro-scalps — makes 1-3 candle trades
+            # mathematically unprofitable regardless of PnL direction
+            early_exit_penalty = 0.003
+            reward -= early_exit_penalty
+            self._reward_components["early_exit_penalty"] -= early_exit_penalty
+        elif held_steps < 10:
+            # Softer penalty for short trades
+            short_hold_penalty = 0.001
+            reward -= short_hold_penalty
+            self._reward_components["early_exit_penalty"] -= short_hold_penalty
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 3 (CRITICAL): Reduce winner_exit Coefficient
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: Even if duration-scaled, the base coefficient must be rechecked
+         after Fix 1 is applied. The target ratio is:
+         winner_exit (per winning trade) < 2× fee_cost (per trade)
+
+After Fix 1, verify in early rollouts that:
+  winner_exit component < 2× fee_cost component in absolute value
+
+If winner_exit is still larger, reduce MAX_BONUS from 0.005 to 0.003.
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 4 (HIGH): Add Per-Step Holding Reward for Profitable Positions
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: The model has no per-step incentive to STAY in winning positions.
+         mark_to_market already handles this partially but the signal
+         is weak. Adding a small direct hold reward teaches patience.
+
+ADD inside per-step calculation while in position:
+    if self.position_held:
+        unrealized_pct = (current_price - self.entry_price) / self.entry_price
+        fee_threshold  = self._fee_rate * 2  # must be above round-trip fee to reward
+
+        if unrealized_pct > fee_threshold:
+            # Reward each step we hold a profitable position above fee threshold
+            # Scales with how profitable: 0.00001 per step × profit multiple
+            profit_multiple = unrealized_pct / fee_threshold
+            hold_reward = 0.00001 * min(profit_multiple, 5.0)  # cap at 5×
+            reward += hold_reward
+            self._reward_components["hold_bonus"] = \
+                self._reward_components.get("hold_bonus", 0) + hold_reward
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 5 (HIGH): Increase invalid_action Penalty
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: -0.001 penalty too small. Model still 16% invalid at training end.
+
+CURRENT:
+    if invalid_action:
+        reward -= 0.001
+
+FIXED:
+    if invalid_action:
+        reward -= 0.005  # 5× increase — makes invalid actions costly
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 6 (MEDIUM): Increase Entropy Coefficient to Slow Policy Convergence
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: Entropy dropped from -1.031 to -0.484. Policy converged to the
+         exploit too fast. Slower convergence = more exploration.
+
+CURRENT in config.py PPO_HYPERPARAMS:
+    "ent_coef": 0.05
+
+FIXED:
+    "ent_coef": 0.08   # 60% increase — maintains more exploration
+
+This change goes in config.py, not trading_env.py.
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 7 (MEDIUM): Fix V4 Feature Detection in Observation Constructor
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: If feature_engineering.py --version v4 adds macro features,
+         trading_env.py may silently skip them in the obs vector.
+
+LOCATION: trading_env.py, in _build_observation() or equivalent method.
+
+CURRENT (approximate):
+    V3_FEATURE_COLS = ["log_return", ..., "macro_trend_sma"]  # fixed list
+    obs_features = df[V3_FEATURE_COLS].iloc[idx].values
+
+FIXED: Use all numeric columns that aren't OHLCV:
+    OHLCV_COLS = {"open", "high", "low", "close", "volume"}
+    feature_cols = [c for c in df.columns if c not in OHLCV_COLS]
+    obs_features = df[feature_cols].iloc[idx].values
+
+    # Add assertion so you know immediately if column count changes:
+    assert len(feature_cols) == self.expected_feature_count, \
+        f"Feature count mismatch: got {len(feature_cols)}, expected {self.expected_feature_count}"
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 8 (MEDIUM): Reward Clipping to Prevent Gradient Explosions
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: With multiple reward components, cumulative episode rewards
+         reached +1.77 for winner_exit alone. Unclipped rewards cause
+         large gradient updates that destabilize LSTM hidden state.
+
+ADD at end of _calculate_reward() or step():
+    # Soft clip reward to [-0.1, +0.1] per step
+    # This normalizes gradients without losing the signal direction
+    reward = max(-0.1, min(0.1, reward))
+
+Note: VecNormalize already handles some of this, but explicit clipping
+prevents extreme outlier rewards from corrupting the LSTM state.
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 9 (LOW): Training Fee Amplification for Selectivity
+────────────────────────────────────────────────────────────────────────────────
+
+CONCEPT: Train with 3× the real fee rate to force the model to be highly
+         selective about entries. Deploy with real fee rate.
+
+This technique is used in production RL trading systems to teach agents
+that fees are expensive. The model learns extreme selectivity during
+training, then performs even better live because real fees are lower.
+
+IN config.py, add a training-specific override:
+    TRAINING_FEE_MULTIPLIER = 3.0  # 3× fees during training
+
+IN trading_env.py:
+    training_fee = self._fee_rate * TRAINING_FEE_MULTIPLIER
+    # Use training_fee for reward calculations
+    # Use self._fee_rate for actual PnL tracking (for accurate metrics)
+
+Expected effect: forces avg_hold above 15 candles during training.
+
+
+================================================================================
+  EXACT CODE FIXES — train_agent.py / config.py
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 10: PPO Hyperparameter Adjustments
+────────────────────────────────────────────────────────────────────────────────
+
+IN config.py PPO_HYPERPARAMS:
+
+    CURRENT:
+        "ent_coef": 0.05
+        "clip_range": 0.1
+        "n_epochs": 5
+
+    FIXED:
+        "ent_coef": 0.08,      # FIX 6: slower policy convergence
+        "clip_range": 0.15,    # slightly wider clipping = more policy change per update
+        "n_epochs": 4,         # fewer epochs per rollout = less overfitting per batch
+
+────────────────────────────────────────────────────────────────────────────────
+FIX 11: Add Replay Ratio Guard to Walk-Forward Training
+────────────────────────────────────────────────────────────────────────────────
+
+IN train_agent.py walk_forward_train():
+
+CURRENT: allows any replay ratio
+
+FIXED: automatically scale timesteps per window to keep replay ratio safe
+
+    MAX_REPLAY_RATIO = 25  # safe threshold
+
+    for window_idx, (train_start, train_end) in enumerate(windows):
+        usable_rows = train_end - train_start - window_size
+        max_safe_steps = usable_rows * MAX_REPLAY_RATIO
+
+        if timesteps > max_safe_steps:
+            logger.warning(
+                f"[W{window_idx+1}] Reducing timesteps from {timesteps:,} "
+                f"to {max_safe_steps:,} to keep replay ratio <= {MAX_REPLAY_RATIO}×"
+            )
+            window_timesteps = max_safe_steps
+        else:
+            window_timesteps = timesteps
+
+        model.learn(total_timesteps=window_timesteps, ...)
+
+
+
+================================================================================
+  DIAGNOSTIC CHECKS — How to verify fixes are working
+================================================================================
+
+After applying all fixes, run a 300K step diagnostic:
+
+  python scripts/train_agent.py \
+    --train data/BTC_USDT_15m_train.parquet \
+    --val   data/BTC_USDT_15m_val.parquet \
+    --timesteps 300000 --windows 1 \
+    --run-name diagnostic_fixed --recurrent
+
+HEALTHY SIGNALS at Rollout 30 (~245K steps):
+
+  Metric                 Broken (current)    Fixed (target)
+  ─────────────────────── ─────────────────    ──────────────
+  winner_exit              +0.35                < +0.10 (suppressed)
+  early_exit_penalty      (missing)            -0.10 to -0.30 (present)
+  fee_cost                -0.23                -0.10 to -0.15 (lower)
+  fee_cost trend          GROWING              SHRINKING or stable
+  avg_hold (validation)   2.2 candles          > 6 candles
+  total_trades (val)      1,461                < 500
+
+IF fee_cost trend is still GROWING at Rollout 30 after all fixes:
+  → Apply FIX 9 (3× training fee multiplier) — the model needs
+    stronger fee incentive to become selective
+
+IF avg_hold is still < 4 candles after all fixes:
+  → Increase MIN_HOLD_CANDLES in FIX 1 from 5 to 8
+  → Increase early_exit_penalty in FIX 2 from 0.003 to 0.006
+
+
+================================================================================
+  RECOMMENDED TRAINING COMMAND AFTER FIXES
+================================================================================
+
+With 4 years data (140K rows) and replay ratio guard:
+
+  python scripts/train_agent.py ^
+    --train data/BTC_USDT_15m_train.parquet ^
+    --val   data/BTC_USDT_15m_val.parquet ^
+    --test  data/BTC_USDT_15m_test.parquet ^
+    --timesteps 2000000 ^
+    --windows 3 ^
+    --run-name tradebot_ppo_fixed_v1 ^
+    --recurrent
+
+With replay ratio guard (FIX 11):
+  Window 1 (~46K rows): capped at 46K × 25 = 1.15M steps
+  Window 2 (~93K rows): full 2M steps (replay ratio = 21×)
+  Window 3 (~140K rows): full 2M steps (replay ratio = 14×)
+
+Run diagnostic_fixed first. Only launch the full run if:
+  early_exit_penalty is present in components
+  winner_exit < fee_cost in absolute value at Rollout 30
+  avg_hold_candles (validation) > 5
+
+
+================================================================================
+  PRIORITY ORDER
+================================================================================
+
+  IMPLEMENT FIRST  → FIX 1 (duration-scaled winner_exit)
+                     FIX 2 (early-exit penalty)
+                     FIX 3 (verify winner_exit:fee_cost ratio)
+
+  IMPLEMENT SECOND → FIX 5 (invalid_action penalty 5×)
+                     FIX 6 (ent_coef 0.05 → 0.08)
+                     FIX 10 (PPO hyperparams)
+
+  IMPLEMENT THIRD  → FIX 4 (hold_bonus per step)
+                     FIX 7 (V4 feature detection)
+                     FIX 11 (replay ratio guard)
+
+  IMPLEMENT ONLY IF NEEDED → FIX 9 (3× training fee multiplier)
+                             FIX 8 (reward clipping)
+
+================================================================================
+  WHAT THE OTHER AI GOT RIGHT
+================================================================================
+
+  1. winner_exit exploitation — correct. This is the primary bug.
+  2. Early-exit penalty needed — correct. Direct and necessary.
+  3. V4 feature gap — correct. Secondary but real.
+
+================================================================================
+  WHAT THE OTHER AI MISSED
+================================================================================
+
+  1. Avg hold DETERIORATED Window 1→2 (2.2→1.6 candles). This proves
+     replay ratio is not the primary cause. The reward structure is.
+
+  2. Max drawdown hitting exactly 50.01% in both windows means the model
+     consistently runs to the kill switch. No learned loss-cutting behavior.
+
+  3. fee_cost growing WITH training (not shrinking) is the mathematical
+     proof that the model is learning to trade MORE, not less. A correct
+     reward function produces the opposite trend.
+
+  4. Entropy converging too fast indicates premature exploit convergence,
+     not healthy policy convergence.
+
+  5. Window 2 Sharpe WORSE than Window 1 despite 6× better replay ratio
+     is the decisive counterevidence to the "replay ratio" hypothesis.
+
+  6. invalid_action at 16% after 3M steps indicates position-state tracking
+     is incomplete — the LSTM hasn't fully internalized its own state.
+EOF
