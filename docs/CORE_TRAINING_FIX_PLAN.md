@@ -97,6 +97,9 @@ Each step is a tracked A/B vs the 15m FIX-B baseline.
 | 06-08 | phase0 | numpy obs + lazy info | env 982→52,823 steps/s, obs parity 0.0 | ✅ keep |
 | 06-08 | algo A/B | RecurrentPPO-4 vs PPO-8 (200k, 15m) | Rec gross PF 1.006 / PPO 0.058 (collapsed) | ✅ keep RecurrentPPO |
 | 06-08 | p2_tf1h | 15m → 1h timeframe (200k, RecurrentPPO) | **gross PF 1.006→1.15, net PF 0.55→0.83, gross expectancy now +0.063%/trade (was ~0)**. Still net-neg: fee 0.20%/trade = 3.2× edge. | ✅ keep 1h; need selectivity |
+| 06-08 | p2_fee3x | 1h + `--fee-multiplier 3.0` (200k) | **VAL: first-ever net profit — net PF 1.268, net expectancy +0.054%/trade, gross expectancy +0.254% clears the 0.20% fee. 17 trades, 46c holds.** TEST: collapsed to 10 trades, gross −1.77%, 33% win — too selective + small-sample noise (Sharpe std ±4.4). | ⚠️ mechanism proven; 3× overshoots. Try 2× |
+
+**Phase 2.2 verdict:** Fee-amplified training WORKS — it's the first lever to push gross expectancy/trade past the fee on validation. But 3× throttles trading too hard to survive the small/recent test regime. Next: `p2_fee2x` (--fee-multiplier 2.0) to find the sweet spot (~25-30 trades, still clearing fees). Then consider 300-500k steps + 3 windows for policy stability/generalization, since 10-17 trade evaluations are statistically unreliable (the project's persistent regime-sensitivity + sample-size problem).
 
 **Quantified target (post-1h):** gross expectancy/trade **+0.063%** vs round-trip fee **0.20%**. Need edge/trade > fee. Levers: fee-amplified training (Phase 2.2, `--fee-multiplier`), BNB discount (0.20%→0.15%), fewer/higher-conviction trades.
 
