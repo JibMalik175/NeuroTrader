@@ -167,6 +167,7 @@ class TradingEnv(gym.Env):
         domain_randomization: bool = False,
         candles_per_day:    int   = 96,      # Fix 1: explicit timeframe param for Sharpe
         min_adx:            float = None,    # Phase 2.3: regime gate (raw ADX threshold)
+        require_uptrend:    bool  = False,   # Phase 2.3b: long only in confirmed uptrends
     ):
         super().__init__()
 
@@ -180,6 +181,7 @@ class TradingEnv(gym.Env):
         self.position_fraction = np.clip(position_fraction, 0.01, 1.0)
         self.domain_randomization = domain_randomization
         self.min_adx         = min_adx
+        self.require_uptrend = require_uptrend
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -240,6 +242,18 @@ class TradingEnv(gym.Env):
             self._adx_gate_norm = (self.min_adx - 25.0) / 25.0
         else:
             self._adx_values = None
+
+        # Phase 2.3b: uptrend filter. ADX gates trend STRENGTH (direction-agnostic),
+        # which on a bear test let the agent open longs into strong DOWNtrends. This
+        # adds a DIRECTION check so longs are only opened in confirmed uptrends.
+        # Prefer macro_trend_sma (price vs 30d SMA); fall back to ema_cross_long
+        # (50EMA vs 200EMA). Both are >0 in an uptrend.
+        self._uptrend_values = None
+        if self.require_uptrend:
+            if "macro_trend_sma" in self.df.columns:
+                self._uptrend_values = self.df["macro_trend_sma"].values.astype(np.float64)
+            elif "ema_cross_long" in self.df.columns:
+                self._uptrend_values = self.df["ema_cross_long"].values.astype(np.float64)
 
         self._reset_state()
 
@@ -356,9 +370,13 @@ class TradingEnv(gym.Env):
         # whole project history) — so we simply forbid opening a position when
         # ADX is low. Exits and stop-losses are never gated.
         if (action == Action.BUY and not self.position_held
-                and self._adx_gate_norm is not None):
-            idx = min(self.current_step, len(self._adx_values) - 1)
-            if self._adx_values[idx] < self._adx_gate_norm:
+                and (self._adx_gate_norm is not None or self._uptrend_values is not None)):
+            idx = min(self.current_step, len(self.df) - 1)
+            adx_ok   = (self._adx_gate_norm is None
+                        or self._adx_values[idx] >= self._adx_gate_norm)
+            trend_ok = (self._uptrend_values is None
+                        or self._uptrend_values[idx] > 0.0)
+            if not (adx_ok and trend_ok):
                 action = Action.HOLD
                 reward_tag = "regime_gated"
                 self._reward_components["regime_gated_count"] = \

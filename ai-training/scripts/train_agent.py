@@ -628,6 +628,11 @@ def main():
                              "is below this (e.g. 25 = only trade trending markets). Applies "
                              "to BOTH training and validation/test so the gate is part of the "
                              "deployed policy. Skip out the chop where the model loses.")
+    parser.add_argument("--require-uptrend", action="store_true",
+                        help="Phase 2.3b: directional gate. Open longs only in confirmed "
+                             "uptrends (price above 30d SMA). Combine with --min-adx so the "
+                             "agent goes long only in strong UPtrends and sits flat in "
+                             "bear/down regimes instead of longing into them.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -644,6 +649,10 @@ def main():
     if args.min_adx is not None:
         ENV_CONFIG["min_adx"] = args.min_adx
         print(f"[CONFIG] regime gate ON → only open positions when raw ADX >= {args.min_adx}")
+    if args.require_uptrend:
+        ENV_CONFIG["require_uptrend"] = True
+        print(f"[CONFIG] directional gate ON → open longs only in confirmed uptrends "
+              f"(price above 30d SMA)")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")

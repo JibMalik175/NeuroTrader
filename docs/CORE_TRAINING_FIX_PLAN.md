@@ -138,6 +138,26 @@ price uptrend (macro_trend_sma>0 or ema_cross_long>0) → sits flat in bears.
      −34% downside on the table. The real unlock for all-weather profitability.
 Also: judge models vs buy-and-hold per regime, not absolute return on a bear test.
 
+| 06-09 | p2_3b_dir25 | 1h + ADX>=25 + `--require-uptrend` (200k) | VAL: over-restricted — gross PF 0.858, net PF 0.692, only **8.7 trades**. TEST: net **−0.31%** (smallest bear loss) but only 7.3 trades. | ⚠️ directional gate works for bear protection but over-restricts long-only |
+
+**LONG-ONLY FRONTIER MAPPED (06-09) — the tension is structural:**
+  - ADX-only gate (regime25): best edge expression (54 trades, gross PF 1.63) but NO bear protection (test −1.70%).
+  - ADX+uptrend gate (dir25): bear protection works (test −1.70% → −0.31%) but edge can't express (8.7 trades, gross PF 0.86).
+  - These pull in opposite directions WITHIN long-only. More filtering ⇒ safer in bears but too few trades to profit.
+
+**Conclusion — long-only is fundamentally capped.** Best achievable is ~breakeven-
+after-fees in normal/up markets and flat-to-small-loss in bears. A long-only bot
+CANNOT profit in a bear; it can only avoid it. The 2026 test (−34%) is structurally
+unwinnable for long-only. We've now ruled out: position sizing, fee shaping, reward
+shaping, timeframe (15m), and the long-only gate frontier.
+
+**=> Phase 2.4 — ADD SHORTING is the decisive next lever (now strongly justified):**
+the model already reads direction (profits in uptrends, avoids downtrends) but can't
+ACT on the down-side. Shorting ~doubles opportunity and makes the strategy all-weather
+— it would PROFIT in bear regimes like the 2026 test instead of just dodging them.
+Build: env short-side logic (enter/exit short, inverse PnL, short stops, fees), action
+space, then mirror in the execution engine. Bigger change; highest expected payoff.
+
 **Quantified target (post-1h):** gross expectancy/trade **+0.063%** vs round-trip fee **0.20%**. Need edge/trade > fee. Levers: fee-amplified training (Phase 2.2, `--fee-multiplier`), BNB discount (0.20%→0.15%), fewer/higher-conviction trades.
 
 **Speed note:** env fix gave 53× on raw env, but real training throughput only ~1.5× (113→~160 it/s) because the LSTM + per-step info plumbing became the new ceiling. Phase 0.5 (gate per-step info dicts to terminal) applied; re-time expected closer to the 476 it/s bench.

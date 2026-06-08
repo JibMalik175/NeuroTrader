@@ -1,0 +1,48 @@
+[
+  {
+    "window": 1,
+    "sharpe": -0.6303,
+    "total_return_pct": -0.3577,
+    "total_trades": 8.6667,
+    "win_rate_pct": 39.3833,
+    "avg_win_pct": 1.7904,
+    "avg_loss_pct": -1.7347,
+    "profit_factor": 0.863,
+    "gross_pnl_before_fees_pct": -0.1546,
+    "fees_paid_pct": 0.2605,
+    "net_realized_pnl_pct": -0.415,
+    "gross_profit_factor": 0.858,
+    "net_profit_factor": 0.692,
+    "gross_expectancy_pct": -0.2993,
+    "net_expectancy_pct": -0.4991,
+    "sharpe_ratio": -0.6303,
+    "max_drawdown_pct": 1.541,
+    "avg_hold_candles": 73.4333,
+    "sharpe_std": 1.5338,
+    "n_val_slices": 3,
+    "raw_action_distribution": {
+      "0": 668,
+      "1": 549,
+      "2": 469
+    },
+    "action_distribution": {
+      "0": 1679,
+      "1": 4,
+      "2": 3
+    },
+    "reward_components": {
+      "portfolio_return": 0.000959867535943701,
+      "mark_to_market": 0.002301112047854669,
+      "fee_cost": -0.0010480028338306668,
+      "invalid_action": 0.0,
+      "invalid_action_count": 557.0,
+      "drawdown_penalty": 0.0,
+      "terminal_penalty": 0.0,
+      "winner_exit": 0.001,
+      "early_exit_penalty": -0.0003,
+      "loss_duration_penalty": 0.0,
+      "regime_gated_count": 455,
+      "stop_loss_count": 1
+    }
+  }
+]
