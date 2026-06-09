@@ -14,6 +14,14 @@ import { logger } from "../utils/logger";
 
 const MAX_DAILY_LOSS_PCT = 0.05;
 
+// ── F7 (Freqtrade plugins/protections): live-trading circuit-breakers ──────────
+const COOLDOWN_AFTER_STOP_MS   = 60 * 60 * 1000;  // wait 1h after a stop-loss before re-entering
+const STOPLOSS_GUARD_COUNT     = 4;               // N stop-losses ...
+const STOPLOSS_GUARD_WINDOW_MS = 24 * 60 * 60 * 1000;  // ... within this window → halt for the day
+const MAX_PEAK_DRAWDOWN_PCT    = 0.15;            // halt if equity falls 15% from peak
+const LOW_PROFIT_LOOKBACK      = 6;               // last N trades ...
+const LOW_PROFIT_MIN_NET       = 0;               // ... if their summed net PnL < this → cool off
+
 export class RiskManager {
   private killed:           boolean = false;
   private sessionStartBal:  number  = 0;
@@ -22,6 +30,9 @@ export class RiskManager {
   private currentBalance:   number  = 0;
   private dailyLossTripped: boolean = false;
   private dailyResetTimer:  ReturnType<typeof setTimeout> | null = null;
+  // F7: protection state
+  private recentTrades: { time: number; netPnl: number; stopped: boolean }[] = [];
+  private cooldownUntil: number = 0;
 
   initialize(initialBalance: number): void {
     this.sessionStartBal  = initialBalance;
@@ -134,6 +145,63 @@ export class RiskManager {
       this.scheduleDailyReset();
     }, delay);
     logger.info(`[RiskMgr] Circuit breaker resets in ${(delay/3600000).toFixed(1)}h`);
+  }
+
+  /**
+   * F7: record a closed trade so the protections (stoploss-guard, low-profit,
+   * cooldown) can reason about recent history. Call from the executioner after
+   * each closePosition().
+   */
+  recordTradeOutcome(result: TradeResult): void {
+    const stopped = result.exitReason === "STOP_LOSS";
+    this.recentTrades.push({ time: Date.now(), netPnl: result.pnlUsdt, stopped });
+    if (this.recentTrades.length > 100) this.recentTrades.shift();
+    if (stopped) {
+      this.cooldownUntil = Date.now() + COOLDOWN_AFTER_STOP_MS;
+      logger.info(`[RiskMgr] F7 cooldown after stop-loss until ${new Date(this.cooldownUntil).toISOString()}`);
+    }
+  }
+
+  /**
+   * F7: master entry gate. Call BEFORE opening a position. Returns whether a new
+   * entry is allowed, with a reason if not. Bundles Freqtrade's protections:
+   * kill/daily-breaker, cooldown-after-stop, stoploss-guard, peak-drawdown, low-profit.
+   */
+  canOpenPosition(): { allowed: boolean; reason?: string } {
+    if (this.killed)           return { allowed: false, reason: "kill switch" };
+    if (this.dailyLossTripped) return { allowed: false, reason: "daily circuit breaker" };
+
+    const now = Date.now();
+    if (now < this.cooldownUntil) {
+      return { allowed: false, reason: `cooldown after stop-loss (${Math.ceil((this.cooldownUntil - now) / 60000)}m left)` };
+    }
+
+    // stoploss-guard: too many stops in the window → halt for the day
+    const stopsInWindow = this.recentTrades.filter(
+      (t) => t.stopped && now - t.time <= STOPLOSS_GUARD_WINDOW_MS
+    ).length;
+    if (stopsInWindow >= STOPLOSS_GUARD_COUNT) {
+      this.dailyLossTripped = true;
+      logger.error(`[RiskMgr] ⚠️ F7 stoploss-guard: ${stopsInWindow} stops in window — halted until midnight`);
+      return { allowed: false, reason: "stoploss guard" };
+    }
+
+    // peak-drawdown protection
+    const dd = (this.peakBalance - this.currentBalance) / Math.max(this.peakBalance, 1);
+    if (dd >= MAX_PEAK_DRAWDOWN_PCT) {
+      return { allowed: false, reason: `peak drawdown ${(dd * 100).toFixed(1)}% >= ${(MAX_PEAK_DRAWDOWN_PCT * 100).toFixed(0)}%` };
+    }
+
+    // low-profit: if the last N trades summed to a loss, cool off
+    if (this.recentTrades.length >= LOW_PROFIT_LOOKBACK) {
+      const recent = this.recentTrades.slice(-LOW_PROFIT_LOOKBACK);
+      const sumNet = recent.reduce((s, t) => s + t.netPnl, 0);
+      if (sumNet < LOW_PROFIT_MIN_NET) {
+        return { allowed: false, reason: `low-profit: last ${LOW_PROFIT_LOOKBACK} trades net $${sumNet.toFixed(2)}` };
+      }
+    }
+
+    return { allowed: true };
   }
 
   getSessionSummary() {
