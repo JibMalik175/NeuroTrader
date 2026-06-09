@@ -172,6 +172,8 @@ class TradingEnv(gym.Env):
         allow_short:        bool  = False,   # Phase 2.4: enable short positions (3-action ladder)
         reward_mode:        str   = "fixb",  # F3: "fixb" (portfolio_return) | "exit" (Freqtrade-style)
         cooldown_candles:   int   = 0,       # F7: block NEW entries for N candles after a close
+        regime_router:      bool  = False,   # Phase 2.8: route direction by regime (long in
+                                             # uptrends, short in downtrends) — all-weather capstone
     ):
         super().__init__()
 
@@ -189,6 +191,7 @@ class TradingEnv(gym.Env):
         self.allow_short     = allow_short
         self.reward_mode     = reward_mode
         self.cooldown_candles = max(0, int(cooldown_candles))
+        self.regime_router   = regime_router
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -261,6 +264,16 @@ class TradingEnv(gym.Env):
                 self._uptrend_values = self.df["macro_trend_sma"].values.astype(np.float64)
             elif "ema_cross_long" in self.df.columns:
                 self._uptrend_values = self.df["ema_cross_long"].values.astype(np.float64)
+
+        # Phase 2.8: regime-router trend signal (>0 uptrend, <0 downtrend). Used to
+        # route direction: longs allowed only in uptrends, shorts only in downtrends.
+        # Prefer macro_trend_sma (price vs 30d SMA); fall back to ema_cross_long.
+        self._regime_trend = None
+        if self.regime_router:
+            if "macro_trend_sma" in self.df.columns:
+                self._regime_trend = self.df["macro_trend_sma"].values.astype(np.float64)
+            elif "ema_cross_long" in self.df.columns:
+                self._regime_trend = self.df["ema_cross_long"].values.astype(np.float64)
 
         self._reset_state()
 
@@ -416,6 +429,23 @@ class TradingEnv(gym.Env):
             reward_tag = "cooldown"
             self._reward_components["cooldown_count"] = \
                 self._reward_components.get("cooldown_count", 0) + 1
+
+        # ── Phase 2.8: Regime Router — route DIRECTION by regime ──────────────
+        # Long entries only in uptrends, short entries only in downtrends (price vs
+        # 30d SMA). This makes ONE model an all-weather trend-follower: it goes long
+        # in bulls and short in bears, instead of specializing in one regime. Only
+        # gates NEW entries (dir==0); exits and covers are never blocked.
+        if (self.regime_router and self._regime_trend is not None
+                and self.position_dir == 0 and action in (Action.BUY, Action.SELL)):
+            idx   = min(self.current_step, len(self.df) - 1)
+            trend = self._regime_trend[idx]
+            wrong_way = (action == Action.BUY and trend <= 0.0) or \
+                        (action == Action.SELL and trend >= 0.0)
+            if wrong_way:
+                action = Action.HOLD
+                reward_tag = "regime_routed"
+                self._reward_components["regime_routed_count"] = \
+                    self._reward_components.get("regime_routed_count", 0) + 1
 
         # ── Experiment E: Hard Stop-Loss ──────────────────────────────────────
         # Force a SELL if the position drops 2.5% below entry.
