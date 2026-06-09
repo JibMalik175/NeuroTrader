@@ -66,6 +66,7 @@ class TradeRecord:
     entry_price:       float
     position_cost:     float           # Cash allocated at entry (after entry fee)
     entry_fee:         float           = 0.0
+    direction:         int             = 1     # Phase 2.4: +1 long, -1 short
     exit_step:         Optional[int]   = None
     exit_price:        Optional[float] = None
     pnl_pct:           Optional[float] = None
@@ -357,12 +358,19 @@ class TradingEnv(gym.Env):
         invalid_remap = False
 
         # Experiment A: remap invalid actions to HOLD instead of penalizing them.
-        if raw_action == Action.BUY and self.position_held:
-            action = Action.HOLD
-            reward_tag = "invalid_to_hold"
-            invalid_remap = True
-            self._reward_components["invalid_action_count"] += 1
-        elif raw_action == Action.SELL and not self.position_held:
+        # Phase 2.4 — position ladder {short -1, flat 0, long +1}:
+        #   BUY  moves UP   (flat->long, short->cover/flat); invalid only if already long.
+        #   SELL moves DOWN (flat->short, long->close/flat);  invalid only if already short.
+        # Long-only (allow_short=False) keeps the original rule: BUY invalid while held,
+        # SELL invalid while flat.
+        if self.allow_short:
+            buy_invalid  = (raw_action == Action.BUY  and self.position_dir == 1)
+            sell_invalid = (raw_action == Action.SELL and self.position_dir == -1)
+        else:
+            buy_invalid  = (raw_action == Action.BUY  and self.position_held)
+            sell_invalid = (raw_action == Action.SELL and not self.position_held)
+
+        if buy_invalid or sell_invalid:
             action = Action.HOLD
             reward_tag = "invalid_to_hold"
             invalid_remap = True
@@ -408,147 +416,26 @@ class TradingEnv(gym.Env):
         # ── Execute Action ────────────────────────────────────────────────────
 
         if action == Action.BUY:
-            if not self.position_held:
-                # Apply slippage: we always get a slightly worse fill
-                fill_price = current_price * (1 + self.current_slippage)
-                # Entry fee deducted from balance before position is sized
-                cash_allocated   = self.balance * self.position_fraction
-                entry_fee        = cash_allocated * self.current_fee_rate
-                self.balance    -= entry_fee
-                self._total_fees_paid += entry_fee
-                self._entry_fees_paid += entry_fee
-                # Fix 7: record exact post-fee cash basis so SELL math is order-independent
-                self.position_cost_basis = cash_allocated - entry_fee
-                self.entry_price         = fill_price
-                self.position_held       = True
-                self.position_dir        = 1     # Phase 2.4: long
-                self.position_size       = self.position_fraction
-                self._steps_in_position  = 0
-                self._steps_since_trade  = 0
-                self.trade_history.append(
-                    TradeRecord(
-                        entry_step=self.current_step,
-                        entry_price=fill_price,
-                        position_cost=self.position_cost_basis,
-                        entry_fee=entry_fee,
-                    )
-                )
-                # FIX-B: fee tracked diagnostically — portfolio return captures the
-                # balance drop naturally (portfolio_value falls by entry_fee at BUY).
-                fee_component = -(entry_fee / self.initial_balance)
-                reward_tag    = "fee_cost"
-                self._reward_components["fee_cost"] += fee_component
-                reward = 0.0  # portfolio return (computed below) replaces this
-            else:
-                # NOTE: This branch is unreachable — invalid BUY-while-holding is
-                # remapped to HOLD at the top of step() before we get here.
-                # Kept as a safety fallback only.
-                reward = 0.0
-                reward_tag = "invalid_to_hold"
+            # Ladder: BUY moves UP. flat -> open LONG; short -> COVER (close).
+            if self.position_dir == 0:
+                self._open_position(1, current_price)
+                reward_tag = "fee_cost"
+            elif self.position_dir == -1:
+                self._close_position(current_price)
+                reward_tag = "mark_to_market"
+            reward = 0.0  # portfolio return (computed below) is the reward
+            # position_dir == +1 is unreachable here (invalid BUY-while-long -> HOLD)
 
         elif action == Action.SELL:
-            if self.position_held:
-                fill_price = current_price * (1 - self.current_slippage)
-
-                # ── Fix 7: Correct fee math ───────────────────────────────────
-                # Fee is charged on gross exit proceeds (notional value at exit),
-                # not on pre-PnL balance. This matches real exchange mechanics.
-                pnl_pct        = (fill_price - self.entry_price) / self.entry_price
-                gross_proceeds = self.position_cost_basis * (1 + pnl_pct)
-                exit_fee       = gross_proceeds * self.current_fee_rate
-                net_proceeds   = gross_proceeds - exit_fee
-                rec            = self.trade_history[-1]
-                gross_pnl      = gross_proceeds - self.position_cost_basis
-                trade_fees     = rec.entry_fee + exit_fee
-                net_pnl        = gross_pnl - trade_fees
-
-                # Update balance: remove the allocated capital, add back net proceeds
-                self.balance   = (self.balance - self.position_cost_basis) + net_proceeds
-                self._gross_pnl       += gross_pnl
-                self._total_fees_paid += exit_fee
-                self._exit_fees_paid  += exit_fee
-
-                # Log trade
-                rec.exit_step   = self.current_step
-                rec.exit_price  = fill_price
-                rec.pnl_pct     = pnl_pct
-                rec.held_steps  = self.current_step - rec.entry_step
-                rec.exit_fee    = exit_fee
-                rec.gross_pnl   = gross_pnl
-                rec.net_pnl     = net_pnl
-                rec.fees_paid   = trade_fees
-                held_steps      = rec.held_steps
-
-                # Fix A: store position_size BEFORE zeroing for reward calc
-                old_position_size = self.position_size
-
-                self.position_held       = False
-                self.position_dir        = 0     # Phase 2.4: back to flat
-                self.entry_price         = 0.0
-                self.position_size       = 0.0
-                self.position_cost_basis = 0.0
-                self._steps_since_trade  = 0
-
-                # FIX-B: All SELL components tracked diagnostically — NOT added to reward.
-                # Portfolio return (computed below) naturally captures:
-                #   • Final-step price move (MTM)
-                #   • Exit fee (balance drops by exit_fee)
-                #   • Net PnL from the trade
-                # No need for separate fee_signal, early_exit_penalty, or winner_exit.
-                prev_price       = self._get_close_price(self.current_step - 1)
-                price_change_pct = (fill_price - prev_price) / (prev_price + 1e-8)
-                sell_mtm         = price_change_pct * old_position_size
-                reward_tag       = "mark_to_market"
-                self._reward_components["mark_to_market"] += sell_mtm
-
-                fee_signal = -(exit_fee / self.initial_balance)
-                self._reward_components["fee_cost"] += fee_signal
-
-                # Tracked for diagnostics — not applied
-                sell_early_pen = 0.0
-                if held_steps < 5:
-                    sell_early_pen = -0.0003
-                    self._reward_components["early_exit_penalty"] += sell_early_pen
-
-                sell_winner = 0.0
-                if pnl_pct > 0 and held_steps >= 5:
-                    MIN_HOLD   = 5
-                    MAX_HOLD   = 20
-                    hold_scale = min(1.0, (held_steps - MIN_HOLD) / (MAX_HOLD - MIN_HOLD))
-                    sell_winner = 0.001 * hold_scale
-                    self._reward_components["winner_exit"] += sell_winner
-
-                reward = 0.0  # portfolio return (computed below) replaces all SELL rewards
-
-                # Priority 1: Log every SELL decision
-                # FIX-B: total_sell_reward is now net_pnl/initial_balance (portfolio impact)
-                trade_portfolio_return = net_pnl / self.initial_balance
-                self._reward_abs_sums["sell_total"] += abs(trade_portfolio_return)
-                self._reward_abs_counts["sell_total"] += 1
-                if len(self._sell_log) < self._max_sell_logs:
-                    self._sell_log.append({
-                        "step": int(self.current_step),
-                        "entry_price": float(rec.entry_price),
-                        "fill_price": float(fill_price),
-                        "pnl_pct": float(pnl_pct),
-                        "held_steps": int(held_steps),
-                        "sell_mtm": float(sell_mtm),
-                        "fee_signal": float(fee_signal),
-                        "early_pen": float(sell_early_pen),
-                        "winner_bonus": float(sell_winner),
-                        "total_sell_reward": float(trade_portfolio_return),  # FIX-B: net impact
-                        "gross_pnl": float(gross_pnl),
-                        "fees_paid": float(trade_fees),
-                        "net_pnl": float(net_pnl),
-                        "was_winner": bool(pnl_pct > 0),
-                    })
-
-            else:
-                # NOTE: This branch is unreachable — invalid SELL-while-flat is
-                # remapped to HOLD at the top of step() before we get here.
-                # Kept as a safety fallback only.
-                reward = 0.0
-                reward_tag = "invalid_to_hold"
+            # Ladder: SELL moves DOWN. long -> CLOSE; flat -> open SHORT.
+            if self.position_dir == 1:
+                self._close_position(current_price)
+                reward_tag = "mark_to_market"
+            elif self.position_dir == 0:
+                self._open_position(-1, current_price)
+                reward_tag = "fee_cost"
+            reward = 0.0  # portfolio return (computed below) is the reward
+            # position_dir == -1 is unreachable here (invalid SELL-while-short -> HOLD)
 
         elif action == Action.HOLD:
             if self.position_held:
@@ -556,7 +443,8 @@ class TradingEnv(gym.Env):
                 # Portfolio return (computed below) captures price movement naturally.
                 prev_price       = self._get_close_price(self.current_step - 1)
                 price_change_pct = (current_price - prev_price) / (prev_price + 1e-8)
-                mtm_component    = price_change_pct * self.position_size
+                # Phase 2.4: direction-aware (short gains when price falls). Diagnostic only.
+                mtm_component    = self.position_dir * price_change_pct * self.position_size
                 reward_tag       = "mark_to_market"
                 self._reward_components["mark_to_market"] += mtm_component
                 self._steps_in_position += 1
@@ -827,6 +715,130 @@ class TradingEnv(gym.Env):
         # (price-entry)/entry; for a short (dir=-1) it flips to (entry-price)/entry.
         unrealized_pnl_pct = self.position_dir * (current_price - self.entry_price) / (self.entry_price + 1e-8)
         return self.balance + self.position_cost_basis * unrealized_pnl_pct
+
+    # ── Phase 2.4: shared open/close path for long AND short ───────────────────
+    def _open_position(self, direction: int, current_price: float):
+        """
+        Open a long (+1) or short (-1) position. One code path for both sides
+        (mirrors Freqtrade's symmetric design). For a long-only run this is only
+        ever called with direction=+1, identical to the old inline open-long.
+        """
+        # Worse fill on entry: long buys at the ask (higher), short sells at the bid (lower)
+        if direction == 1:
+            fill_price = current_price * (1 + self.current_slippage)
+        else:
+            fill_price = current_price * (1 - self.current_slippage)
+        cash_allocated   = self.balance * self.position_fraction
+        entry_fee        = cash_allocated * self.current_fee_rate
+        self.balance    -= entry_fee
+        self._total_fees_paid += entry_fee
+        self._entry_fees_paid += entry_fee
+        self.position_cost_basis = cash_allocated - entry_fee
+        self.entry_price         = fill_price
+        self.position_held       = True
+        self.position_dir        = direction
+        self.position_size       = self.position_fraction
+        self._steps_in_position  = 0
+        self._steps_since_trade  = 0
+        self.trade_history.append(
+            TradeRecord(
+                entry_step=self.current_step,
+                entry_price=fill_price,
+                position_cost=self.position_cost_basis,
+                entry_fee=entry_fee,
+                direction=direction,
+            )
+        )
+        # FIX-B: fee tracked diagnostically; portfolio_return captures the balance drop.
+        self._reward_components["fee_cost"] += -(entry_fee / self.initial_balance)
+
+    def _close_position(self, current_price: float):
+        """
+        Close the open position (long or short). One code path for both sides.
+        Direction-aware PnL: long profits when price rises, short when it falls.
+        For a long-only run this is identical to the old inline close-long.
+        """
+        direction = self.position_dir
+        # Worse fill on exit: long sells at the bid (lower), short covers at the ask (higher)
+        if direction == 1:
+            fill_price = current_price * (1 - self.current_slippage)
+        else:
+            fill_price = current_price * (1 + self.current_slippage)
+
+        pnl_pct        = direction * (fill_price - self.entry_price) / self.entry_price
+        gross_proceeds = self.position_cost_basis * (1 + pnl_pct)
+        exit_fee       = gross_proceeds * self.current_fee_rate
+        net_proceeds   = gross_proceeds - exit_fee
+        rec            = self.trade_history[-1]
+        gross_pnl      = gross_proceeds - self.position_cost_basis
+        trade_fees     = rec.entry_fee + exit_fee
+        net_pnl        = gross_pnl - trade_fees
+
+        self.balance   = (self.balance - self.position_cost_basis) + net_proceeds
+        self._gross_pnl       += gross_pnl
+        self._total_fees_paid += exit_fee
+        self._exit_fees_paid  += exit_fee
+
+        rec.exit_step   = self.current_step
+        rec.exit_price  = fill_price
+        rec.pnl_pct     = pnl_pct
+        rec.held_steps  = self.current_step - rec.entry_step
+        rec.exit_fee    = exit_fee
+        rec.gross_pnl   = gross_pnl
+        rec.net_pnl     = net_pnl
+        rec.fees_paid   = trade_fees
+        held_steps      = rec.held_steps
+
+        old_position_size = self.position_size
+        old_direction     = direction
+
+        self.position_held       = False
+        self.position_dir        = 0
+        self.entry_price         = 0.0
+        self.position_size       = 0.0
+        self.position_cost_basis = 0.0
+        self._steps_since_trade  = 0
+
+        # FIX-B diagnostics (direction-aware) — tracked, NOT added to reward.
+        prev_price       = self._get_close_price(self.current_step - 1)
+        price_change_pct = old_direction * (fill_price - prev_price) / (prev_price + 1e-8)
+        sell_mtm         = price_change_pct * old_position_size
+        self._reward_components["mark_to_market"] += sell_mtm
+        self._reward_components["fee_cost"]       += -(exit_fee / self.initial_balance)
+
+        sell_early_pen = 0.0
+        if held_steps < 5:
+            sell_early_pen = -0.0003
+            self._reward_components["early_exit_penalty"] += sell_early_pen
+
+        sell_winner = 0.0
+        if pnl_pct > 0 and held_steps >= 5:
+            MIN_HOLD, MAX_HOLD = 5, 20
+            hold_scale = min(1.0, (held_steps - MIN_HOLD) / (MAX_HOLD - MIN_HOLD))
+            sell_winner = 0.001 * hold_scale
+            self._reward_components["winner_exit"] += sell_winner
+
+        trade_portfolio_return = net_pnl / self.initial_balance
+        self._reward_abs_sums["sell_total"] += abs(trade_portfolio_return)
+        self._reward_abs_counts["sell_total"] += 1
+        if len(self._sell_log) < self._max_sell_logs:
+            self._sell_log.append({
+                "step": int(self.current_step),
+                "entry_price": float(rec.entry_price),
+                "fill_price": float(fill_price),
+                "pnl_pct": float(pnl_pct),
+                "held_steps": int(held_steps),
+                "direction": int(old_direction),
+                "sell_mtm": float(sell_mtm),
+                "fee_signal": float(-(exit_fee / self.initial_balance)),
+                "early_pen": float(sell_early_pen),
+                "winner_bonus": float(sell_winner),
+                "total_sell_reward": float(trade_portfolio_return),
+                "gross_pnl": float(gross_pnl),
+                "fees_paid": float(trade_fees),
+                "net_pnl": float(net_pnl),
+                "was_winner": bool(pnl_pct > 0),
+            })
 
     # region agent log
     def _debug_log(self, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
