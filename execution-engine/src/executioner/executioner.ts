@@ -93,6 +93,15 @@ export class Executioner {
   // ── Entry ────────────────────────────────────────────────────────────────────
 
   private async tryEnter(output: ModelOutput, currentPrice: number): Promise<void> {
+    // F7 (Freqtrade protections): master entry gate — cooldown-after-stop,
+    // stoploss-guard, peak-drawdown halt, low-profit cooloff
+    const gate = this.risk.canOpenPosition();
+    if (!gate.allowed) {
+      logger.warn(`[Exec] Entry blocked by protection: ${gate.reason}`);
+      await this.updateSignalSkipReason(`PROTECTION: ${gate.reason}`);
+      return;
+    }
+
     if (output.confidence < CONFIG.minConfidence) {
       logger.info(`[Exec] BUY rejected — conf ${(output.confidence*100).toFixed(1)}% < ${(CONFIG.minConfidence*100).toFixed(0)}%`);
       await this.updateSignalSkipReason("LOW_CONFIDENCE");
@@ -176,6 +185,9 @@ export class Executioner {
     const newBalance = this.risk.balance + order.price * order.filledSize - order.fee;
     this.risk.updateBalance(newBalance);
     if (CONFIG.executionMode === ExecutionMode.PAPER) this.paperBalance = newBalance;
+
+    // F7: feed the protections (stoploss-guard window, low-profit, cooldown-after-stop)
+    this.risk.recordTradeOutcome(result);
 
     this.position = null;
 
