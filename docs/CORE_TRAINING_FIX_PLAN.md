@@ -153,6 +153,16 @@ policy converges (200k is low); (b) walk-forward across more windows; (c) ensemb
 regime-router between the long-biased and short-biased specialists; (d) evaluate on a BULL
 test slice too (current test is a bear, which flatters the short-biased model).
 
+| 06-10 | p2_7_disc_short_400k | disc_short scaled 200k→400k + `--eval-every 100000` | **Milestone DISSOLVED.** Test Sharpe std 5.37→0.71 (variance fixed by training) BUT test net +0.15%→**−1.79%**, net PF 1.18→0.59. F6 flagged final model OVERFIT (best @300k > final); best checkpoint val Sortino still −1.34 (neg). | ❌ the +0.15% was NOISE, not edge |
+
+**HARD CONCLUSION (06-10): no robust edge.** The 200k "milestone" was high-variance noise that
+landed lucky on one bear slice. Scaling to 400k cut variance (5.37→0.71) and revealed the true
+policy: consistently net-negative (PF 0.59). Rules out "just train longer." F6 proved its worth
+(caught the overfit). We have rigorously shown thin/no robust OOS edge across: pos-sizing, fee
+shaping, reward shaping, 15m→1h, regime gates, shorting, exit-reward, cooldown, fee-amplification,
+and scale-up. Consistent with the ~1-in-3/1-in-4 odds. Next: genuinely different lever (F8
+transformer / F10 outlier / different data) OR reframe goal (regime-router / beat-buy&hold).
+
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
 **Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
