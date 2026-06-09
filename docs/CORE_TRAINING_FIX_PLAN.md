@@ -138,6 +138,17 @@ price uptrend (macro_trend_sma>0 or ema_cross_long>0) → sits flat in bears.
      −34% downside on the table. The real unlock for all-weather profitability.
 Also: judge models vs buy-and-hold per regime, not absolute return on a bear test.
 
+| 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
+
+**Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
+doubled the trade frequency → the overtrading/fee-death problem (our oldest enemy)
+got 2× worse, not better. The agent churns long↔short (11-candle holds, 130 trades,
+3.83% fees) instead of profiting from bears. Shorting is a needed *capability* but
+needs *discipline*. => Next feature (Freqtrade exit-concentrated reward + DURATION
+shaping that penalizes churn/over-holding) is now NON-OPTIONAL — it's the mechanism
+that makes shorting (and trading generally) selective enough to clear fees. Shorting
+stays gated behind --allow-short; re-test it AFTER the new reward lands.
+
 | 06-09 | p2_3b_dir25 | 1h + ADX>=25 + `--require-uptrend` (200k) | VAL: over-restricted — gross PF 0.858, net PF 0.692, only **8.7 trades**. TEST: net **−0.31%** (smallest bear loss) but only 7.3 trades. | ⚠️ directional gate works for bear protection but over-restricts long-only |
 
 **LONG-ONLY FRONTIER MAPPED (06-09) — the tension is structural:**
