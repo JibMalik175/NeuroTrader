@@ -55,14 +55,16 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 - [x] **F4 Fee-in-price model** — ✅ DONE-BY-EQUIVALENCE (skipped). Our env already charges fee on
        entry+exit notional (`cost_basis=cash×(1−fee)`, `net=gross×(1−fee)`) = mathematically identical
        to Freqtrade's fee-in-price. Implementing it would be a no-op refactor. Verified, not needed.
-- [ ] ⬜ **F5 MinMaxScaler(-1,1) feature norm fit on train** — replaces VecNormalize-obs; kills the
-       ONNX-baking headache; optional PCA for the 1543-dim obs
+- [x] **F5 MinMaxScaler(-1,1) feature norm fit on train** — ✅ DONE, opt-in `--feature-scaling minmax`:
+       env scales features to [-1,1] by TRAIN min/max (val/test use train stats), VecNormalize
+       norm_obs auto-disabled. Unit-verified (range, inverse parity, default path untouched).
+       Not yet A/B'd in a training run. (Optional PCA idea: skipped — LSTM handles 1543-dim fine.)
 - [x] **F6 EvalCallback best-model-during-training** ✅ — `--eval-every N` checkpoints best model
        by Sortino during training + overfit report. Opt-in (0=off). Verified by smoke test.
-- [~] **F7 Protections** — cooldown_period ✅ DONE in env (`--cooldown N`). ✅ riskManager.ts now
-       has `canOpenPosition()` (kill/breaker/cooldown-after-stop/stoploss-guard/peak-DD/low-profit)
-       + `recordTradeOutcome()`. ⬜ REMAINING: wire both into `executioner.ts` call sites; run
-       `npx tsc --noEmit` after `npm install`.
+- [x] **F7 Protections** — ✅ FULLY WIRED: env cooldown (`--cooldown N`); riskManager.ts
+       `canOpenPosition()` + `recordTradeOutcome()`; executioner.ts gates every entry (blocked
+       entries logged with PROTECTION skip reason) and feeds every close back. ⬜ only remaining:
+       `npx tsc --noEmit` after `npm install` (no node_modules on this machine).
 - [x] (was deferred) re-test shorting AFTER F3 reward — done (p2_6_disc_short, p2_7_400k)
 - [x] (was deferred) directional SHORT gate — done as **regime router** (p2_8, see below)
 
