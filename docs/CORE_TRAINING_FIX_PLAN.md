@@ -138,6 +138,21 @@ price uptrend (macro_trend_sma>0 or ema_cross_long>0) → sits flat in bears.
      −34% downside on the table. The real unlock for all-weather profitability.
 Also: judge models vs buy-and-hold per regime, not absolute return on a bear test.
 
+| 06-09 | p2_6_exit_long | 1h + `--reward-mode exit` (long-only, 200k) | VAL improved (net PF 0.75→0.96, gExp +0.14%) but TEST worse (net −2.32%). Exit reward sharpens trade quality but overfits val; long-only still can't win the bear test. | ⚠️ exit reward helps val, doesn't fix long-only bear |
+| 06-09 | **p2_6_disc_short** | 1h + `--allow-short --reward-mode exit --cooldown 12` (200k) | **FIRST net-profitable OUT-OF-SAMPLE result: TEST net +0.15%, net PF 1.176, gross expectancy +0.274% (clears fee), 41 trades.** Churn tamed (raw 92→41 test trades). BUT VAL negative (net PF 0.59) + huge variance (test Sharpe std 5.37). | 🎯 MILESTONE but a BEAR SPECIALIST, not all-weather |
+
+**MILESTONE (06-09) — disciplined shorting cracked the bear test.** shorting + exit-reward
++ cooldown = first model to make money OOS on the 2026 −34% bear (net PF 1.176). Validates
+today's whole direction: the anti-churn features worked (92→41 trades), gross edge finally
+beat fees. BUT: it's a BEAR SPECIALIST — wins the harsh test bear, LOSES the milder val
+period (val/test inverted), and high variance (std 5.37) means the win is concentrated in the
+most-bearish slice. Mirror image of the long-only model (bull specialist). NEITHER is robust.
+
+**NEXT problem = CONSISTENCY/ROBUSTNESS, not edge.** Options: (a) more training/data so the
+policy converges (200k is low); (b) walk-forward across more windows; (c) ensemble or
+regime-router between the long-biased and short-biased specialists; (d) evaluate on a BULL
+test slice too (current test is a bear, which flatters the short-biased model).
+
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
 **Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
