@@ -243,6 +243,7 @@ def create_objective(
     timesteps:       int,
     n_envs:          int,
     candles_per_day: int = 96,   # P0-5 fix: pass through to make_env and run_validation
+    objective_metric: str = "sharpe_ratio",  # F9: sharpe_ratio | sortino_ratio | calmar_ratio
 ):
     """
     Returns an Optuna objective function that:
@@ -350,23 +351,30 @@ def create_objective(
             return float("-inf")
 
         sharpe      = metrics.get("sharpe_ratio", -99.0)
+        sortino     = metrics.get("sortino_ratio", -99.0)   # F9
+        calmar      = metrics.get("calmar_ratio", 0.0)      # F9
         total_ret   = metrics.get("total_return_pct", 0.0)
         win_rate    = metrics.get("win_rate_pct", 0.0)
         n_trades    = metrics.get("total_trades", 0)
         max_dd      = metrics.get("max_drawdown_pct", 0.0)
+        obj_value   = metrics.get(objective_metric, -99.0)  # F9: the metric we optimize
 
         print(f"\n  ✅ Trial {trial.number} complete ({elapsed:.0f}s)")
-        print(f"     Sharpe: {sharpe:>8.3f} | Return: {total_ret:>7.2f}% | "
-              f"WR: {win_rate:>5.1f}% | Trades: {n_trades} | MaxDD: {max_dd:.1f}%")
+        print(f"     Obj[{objective_metric}]: {obj_value:>7.3f} | Sharpe: {sharpe:>7.3f} | "
+              f"Sortino: {sortino:>7.3f} | Return: {total_ret:>6.2f}% | Trades: {n_trades}")
 
         # Store extra metrics as trial user attributes for later analysis
+        trial.set_user_attr("sharpe_ratio", sharpe)
+        trial.set_user_attr("sortino_ratio", sortino)
+        trial.set_user_attr("calmar_ratio", calmar)
         trial.set_user_attr("total_return_pct", total_ret)
         trial.set_user_attr("win_rate_pct", win_rate)
         trial.set_user_attr("total_trades", n_trades)
         trial.set_user_attr("max_drawdown_pct", max_dd)
         trial.set_user_attr("training_time_s", round(elapsed, 1))
 
-        return sharpe
+        # F9: optimize the chosen risk-adjusted metric (Sortino/Calmar more robust than Sharpe)
+        return obj_value
 
     return objective
 
@@ -543,6 +551,10 @@ Examples:
                         help="Optuna storage URI (default: sqlite:///optuna_sweep.db)")
     parser.add_argument("--n-envs",     type=int, default=4,
                         help="Parallel environments per trial (default: 4)")
+    parser.add_argument("--objective",  type=str, default="sortino_ratio",
+                        choices=["sharpe_ratio", "sortino_ratio", "calmar_ratio"],
+                        help="F9: metric to optimize. Default sortino_ratio (more robust than "
+                             "Sharpe for our regime-sensitive, drawdown-prone problem).")
     parser.add_argument("--timeframe",  type=str, default="15m",
                         choices=list(CANDLES_PER_DAY.keys()),
                         help="Candle timeframe for correct Sharpe annualization (P0-5 fix)")
@@ -599,7 +611,7 @@ Examples:
     # ── Run Optimization ──────────────────────────────────────────────────────
     cpd       = CANDLES_PER_DAY.get(args.timeframe, 96)
     objective = create_objective(train_df, val_df, args.timesteps, args.n_envs,
-                                 candles_per_day=cpd)
+                                 candles_per_day=cpd, objective_metric=args.objective)
 
     sweep_start = time.time()
 
