@@ -50,10 +50,13 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 
 - [x] **F1 Direction-aware position engine** (position_dir, generalized PnL) — shorting foundation
 - [x] **F2 Shorting via 3-action ladder** (env engine `_open/_close_position` + `--allow-short`)
-- [ ] 🔄 **F3 Exit-concentrated + duration-shaped reward** ← **NEXT, NON-OPTIONAL.** Freqtrade-style:
-       reward realized PnL at EXIT (`pnl × factor`) + win bonus + penalize churn/over-holding
-       (max_trade_duration). This is what stops the shorting churn and the overtrading-into-fees.
-       Add as a SELECTABLE reward mode (A/B vs current FIX-B portfolio_return).
+- [x] **F3 Exit-concentrated reward** (`--reward-mode exit`) — IMPLEMENTED + unit-verified (fixb
+       unchanged; exit is sparse & pays NET return so churn scores negative). **NOT yet validated
+       by a training run.** ⬅️ **NEXT ACTION: run the A/B** to see if it fixes the shorting churn:
+       `python scripts\train_agent.py --train data\BTC_USDT_1h_train.parquet --val data\BTC_USDT_1h_val.parquet --test data\BTC_USDT_1h_test.parquet --timesteps 200000 --windows 1 --run-name p2_5_exit_short --recurrent --n-envs 4 --candles-per-day 24 --allow-short --reward-mode exit`
+       Compare with `compare_runs.py` vs p2_4_longshort (churn) and p2_tf1h. Watch: trades DOWN,
+       avg-hold UP, net PF UP. If exit-reward alone over-holds, tune MAX_HOLD/FACTOR in
+       `_compute_exit_reward`. May also A/B `--reward-mode exit` WITHOUT `--allow-short` first.
 - [ ] ⬜ **F4 Fee-in-price model** (`add_entry_fee`/`add_exit_fee`) — PnL inherently net of fees
 - [ ] ⬜ **F5 MinMaxScaler(-1,1) feature norm fit on train** — replaces VecNormalize-obs; kills the
        ONNX-baking headache; optional PCA for the 1543-dim obs
