@@ -163,6 +163,24 @@ shaping, reward shaping, 15m→1h, regime gates, shorting, exit-reward, cooldown
 and scale-up. Consistent with the ~1-in-3/1-in-4 odds. Next: genuinely different lever (F8
 transformer / F10 outlier / different data) OR reframe goal (regime-router / beat-buy&hold).
 
+| 06-10 | **p2_8_regime_router** | shorting + exit reward + cooldown 12 + `--regime-router` (longs only in uptrends, shorts only in downtrends; 300k) | **Best validation of the entire ladder:** Sharpe −0.94 (prev best −1.68), gross PF **1.386**, net PF **0.879**, gExp **+0.132%**, net −0.55%, 45 trades, 95% HOLD. TEST: net −1.28%, gross PF 0.89, Sharpe −2.97 (std 0.46 — low variance, so the negative is real). F6 again flagged final < best-checkpoint (Sortino −0.092 @300k vs −0.94 final). | ⚠️ CAPSTONE: best-yet but still under the fee bar |
+
+**CAPSTONE VERDICT (06-10) — the regime router is the best model we have built, and it
+still doesn't clear fees.** Every anti-churn/selectivity feature stacked (router + exit
+reward + cooldown) produced the strongest, most-stable validation in 20+ runs: gross
+PF 1.386, gross expectancy +0.132%/trade — roughly 2× the plain-1h edge (+0.063%) —
+but still only ~2/3 of the 0.20% round-trip fee. Net PF 0.879 val, 0.60 test. The
+pattern across the WHOLE ladder is now unambiguous: each discipline feature monotonically
+improves gross edge per trade, but the curve is asymptoting BELOW the fee bar. This was
+the agreed finish line for the current approach. Remaining honest options:
+  1. **Cut the fee bar, not the edge:** BNB discount (0.20%→0.15% round-trip) + maker/limit
+     entries (~0.02–0.10%) — at +0.132% gross expectancy the router would be net-positive
+     at maker fees. This is an EXECUTION fix, not a model fix.
+  2. **Different model class (F8 transformer) or more data (2017+)** — new information, not
+     another reward knob.
+  3. **Paper-trade the router as-is** to validate the pipeline end-to-end with $0 at risk.
+Reward/gate tuning on the current setup is EXHAUSTED — 20+ runs, every lever, same asymptote.
+
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
 **Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
