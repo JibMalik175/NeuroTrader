@@ -170,6 +170,7 @@ class TradingEnv(gym.Env):
         min_adx:            float = None,    # Phase 2.3: regime gate (raw ADX threshold)
         require_uptrend:    bool  = False,   # Phase 2.3b: long only in confirmed uptrends
         allow_short:        bool  = False,   # Phase 2.4: enable short positions (3-action ladder)
+        reward_mode:        str   = "fixb",  # F3: "fixb" (portfolio_return) | "exit" (Freqtrade-style)
     ):
         super().__init__()
 
@@ -185,6 +186,7 @@ class TradingEnv(gym.Env):
         self.min_adx         = min_adx
         self.require_uptrend = require_uptrend
         self.allow_short     = allow_short
+        self.reward_mode     = reward_mode
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -288,6 +290,9 @@ class TradingEnv(gym.Env):
         self._total_fees_paid    = 0.0
         self._entry_fees_paid    = 0.0
         self._exit_fees_paid     = 0.0
+        # F3: holds (net_return, held_steps) of a trade that closed THIS step, so the
+        # exit-concentrated reward mode can reward realized (fee-adjusted) PnL at close.
+        self._just_closed        = None
 
         # Domain Randomization for robustness against exchange variations
         if getattr(self, "domain_randomization", False):
@@ -538,8 +543,18 @@ class TradingEnv(gym.Env):
         # This keeps portfolio return as the dominant signal while adding the
         # proportional loss urgency on top (10-20% of MTM magnitude at 5-10% loss).
         portfolio_return = (portfolio_value - self._prev_portfolio) / self.initial_balance
-        reward += portfolio_return
         self._reward_components["portfolio_return"] += portfolio_return
+
+        # ── F3: reward mode selector ──────────────────────────────────────────
+        # "fixb" (default): dense per-step portfolio return (unchanged behavior).
+        # "exit": sparse, trade-quality reward — pay realized NET (fee-adjusted)
+        #   return at close, scaled, with a win bonus and an over-hold penalty.
+        #   Because it pays NET return, a churn scalp that doesn't clear fees earns
+        #   a NEGATIVE reward — directly discouraging the overtrading that kills us.
+        if self.reward_mode == "exit":
+            reward += self._compute_exit_reward()
+        else:
+            reward += portfolio_return
 
         self._prev_portfolio = portfolio_value
 
@@ -789,6 +804,10 @@ class TradingEnv(gym.Env):
         rec.fees_paid   = trade_fees
         held_steps      = rec.held_steps
 
+        # F3: stash this trade's realized, fee-adjusted return + hold for the
+        # exit-concentrated reward mode (read once at the end of this step()).
+        self._just_closed = (net_pnl / (self.position_cost_basis + 1e-12), held_steps)
+
         old_position_size = self.position_size
         old_direction     = direction
 
@@ -839,6 +858,43 @@ class TradingEnv(gym.Env):
                 "net_pnl": float(net_pnl),
                 "was_winner": bool(pnl_pct > 0),
             })
+
+    def _compute_exit_reward(self) -> float:
+        """
+        F3 exit-concentrated reward (Freqtrade-inspired, adapted to our env).
+
+        - On the step a trade CLOSES: reward its realized NET (fee-adjusted) return,
+          scaled by FACTOR; doubled if it beat the profit target, halved if held too
+          long. Paying NET return is the anti-churn lever: a scalp that fails to clear
+          the round-trip fee yields a NEGATIVE reward, so the agent learns selectivity.
+        - While HOLDING past MAX_HOLD: a small negative nudge to exit (anti-over-hold).
+        - Otherwise 0 (sparse — most steps carry no reward, unlike dense FIX-B).
+        """
+        FACTOR     = 100.0   # a 1% net trade -> ~1.0 reward (similar scale to FIX-B steps)
+        PROFIT_AIM = 0.03    # 3% net target for the win bonus
+        WIN_FACTOR = 2.0
+        MAX_HOLD   = max(48, self.window_size)   # candles before over-hold penalties kick in
+
+        jc = self._just_closed
+        if jc is not None:
+            self._just_closed = None
+            net_ret, held = jc
+            f = FACTOR
+            if held > MAX_HOLD:
+                f *= 0.5
+            if net_ret > PROFIT_AIM:
+                f *= WIN_FACTOR
+            r = net_ret * f
+            self._reward_components["exit_reward"] = \
+                self._reward_components.get("exit_reward", 0.0) + r
+            return r
+
+        if self.position_held and self._steps_in_position > MAX_HOLD:
+            pen = -0.01 * (self._steps_in_position - MAX_HOLD) / MAX_HOLD
+            self._reward_components["overhold_penalty"] = \
+                self._reward_components.get("overhold_penalty", 0.0) + pen
+            return pen
+        return 0.0
 
     # region agent log
     def _debug_log(self, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
