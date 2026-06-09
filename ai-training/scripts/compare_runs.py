@@ -37,9 +37,9 @@ def main():
         priority = [r for r in runs if r.startswith(("p0_", "p2_"))]
         runs = priority + [r for r in runs if r not in priority]
 
-    hdr = (f"{'run':<22}{'Sharpe':>9}{'+-std':>7}{'trades':>7}"
+    hdr = (f"{'run':<22}{'Sharpe':>8}{'Sortino':>8}{'Calmar':>7}{'trades':>7}"
            f"{'grossPF':>8}{'netPF':>7}{'gExp%':>8}{'nExp%':>8}"
-           f"{'fees%':>7}{'net%':>8}{'hold':>6}{'H%':>6}")
+           f"{'net%':>8}{'hold':>6}{'H%':>6}")
     print(f"\nRound-trip fee bar: gross expectancy must exceed {ROUND_TRIP_FEE_PCT:.2f}%\n")
     print(hdr)
     print("-" * len(hdr))
@@ -56,10 +56,11 @@ def main():
         clears = "*" if gexp > ROUND_TRIP_FEE_PCT else " "
         npf = m.get("net_profit_factor", 0)
         prof = "<<" if npf > 1.0 else ""  # net-profitable marker
-        print(f"{run:<22}{m.get('sharpe_ratio',0):>9.3f}{m.get('sharpe_std',0):>7.2f}"
+        print(f"{run:<22}{m.get('sharpe_ratio',0):>8.2f}{m.get('sortino_ratio',0):>8.2f}"
+              f"{m.get('calmar_ratio',0):>7.2f}"
               f"{m.get('total_trades',0):>7.1f}{m.get('gross_profit_factor',0):>8.3f}"
               f"{npf:>7.3f}{gexp:>7.3f}{clears}{m.get('net_expectancy_pct',0):>8.3f}"
-              f"{m.get('fees_paid_pct',0):>7.2f}{m.get('net_realized_pnl_pct',0):>8.2f}"
+              f"{m.get('net_realized_pnl_pct',0):>8.2f}"
               f"{m.get('avg_hold_candles',0):>6.1f}{hpct:>5.0f}% {prof}")
 
     print("\n  * = gross expectancy clears the round-trip fee (real edge after costs)")
