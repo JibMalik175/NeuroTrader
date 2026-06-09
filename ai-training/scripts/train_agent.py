@@ -633,6 +633,11 @@ def main():
                              "uptrends (price above 30d SMA). Combine with --min-adx so the "
                              "agent goes long only in strong UPtrends and sits flat in "
                              "bear/down regimes instead of longing into them.")
+    parser.add_argument("--allow-short", action="store_true",
+                        help="Phase 2.4: enable SHORT positions via the 3-action ladder "
+                             "(BUY moves short->flat->long, SELL moves long->flat->short). "
+                             "Lets the agent profit in down markets instead of only avoiding "
+                             "them. Keeps RecurrentPPO/LSTM (no MaskablePPO).")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -653,6 +658,10 @@ def main():
         ENV_CONFIG["require_uptrend"] = True
         print(f"[CONFIG] directional gate ON → open longs only in confirmed uptrends "
               f"(price above 30d SMA)")
+    if args.allow_short:
+        ENV_CONFIG["allow_short"] = True
+        print(f"[CONFIG] SHORTING ON → 3-action ladder (short <-> flat <-> long), "
+              f"agent can profit in down markets")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")
