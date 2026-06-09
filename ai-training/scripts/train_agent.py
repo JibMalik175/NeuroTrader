@@ -716,6 +716,10 @@ def main():
                         help="Phase 2.8 capstone: route DIRECTION by regime — open longs only "
                              "in uptrends, shorts only in downtrends (price vs 30d SMA). Makes "
                              "one model an all-weather trend-follower. Use with --allow-short.")
+    parser.add_argument("--outlier-threshold", type=float, default=0.0,
+                        help="F10: if >0, skip opening positions on out-of-distribution candles "
+                             "(mean per-feature |z| from the TRAIN distribution > threshold). "
+                             "Defends generalization. Try ~2.0-3.0. 0 = off.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -761,6 +765,19 @@ def main():
     val_df = pd.read_parquet(args.val).reset_index(drop=True)
 
     print(f"\n[DATA] Train: {len(train_df):,} rows | Val: {len(val_df):,} rows")
+
+    # F10: fit the outlier reference (mean,std) on the TRAIN feature distribution,
+    # then inject into ENV_CONFIG so train/val/test all score novelty vs TRAIN.
+    if args.outlier_threshold > 0:
+        _ref_cfg = {k: v for k, v in ENV_CONFIG.items()
+                    if k not in ("outlier_threshold", "feature_ref")}
+        _tmp = TradingEnv(train_df, **_ref_cfg)
+        _fm = _tmp._feature_matrix
+        ENV_CONFIG["outlier_threshold"] = args.outlier_threshold
+        ENV_CONFIG["feature_ref"] = (_fm.mean(axis=0), _fm.std(axis=0))
+        del _tmp, _fm
+        print(f"[CONFIG] outlier gate ON (threshold {args.outlier_threshold}) → "
+              f"skip out-of-distribution candles (ref = train distribution)")
 
     # ── Train ─────────────────────────────────────────────────────────────────
     best_model, best_vecnorm_path = walk_forward_train(
