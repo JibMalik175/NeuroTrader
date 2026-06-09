@@ -171,6 +171,7 @@ class TradingEnv(gym.Env):
         require_uptrend:    bool  = False,   # Phase 2.3b: long only in confirmed uptrends
         allow_short:        bool  = False,   # Phase 2.4: enable short positions (3-action ladder)
         reward_mode:        str   = "fixb",  # F3: "fixb" (portfolio_return) | "exit" (Freqtrade-style)
+        cooldown_candles:   int   = 0,       # F7: block NEW entries for N candles after a close
     ):
         super().__init__()
 
@@ -187,6 +188,7 @@ class TradingEnv(gym.Env):
         self.require_uptrend = require_uptrend
         self.allow_short     = allow_short
         self.reward_mode     = reward_mode
+        self.cooldown_candles = max(0, int(cooldown_candles))
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -293,6 +295,8 @@ class TradingEnv(gym.Env):
         # F3: holds (net_return, held_steps) of a trade that closed THIS step, so the
         # exit-concentrated reward mode can reward realized (fee-adjusted) PnL at close.
         self._just_closed        = None
+        # F7: no NEW entries allowed until current_step reaches this (cooldown after a close).
+        self._cooldown_until     = 0
 
         # Domain Randomization for robustness against exchange variations
         if getattr(self, "domain_randomization", False):
@@ -400,6 +404,18 @@ class TradingEnv(gym.Env):
                 reward_tag = "regime_gated"
                 self._reward_components["regime_gated_count"] = \
                     self._reward_components.get("regime_gated_count", 0) + 1
+
+        # ── F7: Cooldown — block NEW entries for N candles after a close ───────
+        # Anti-churn: after exiting, the agent must sit out cooldown_candles before
+        # opening again (longs via BUY-from-flat, shorts via SELL-from-flat). Exits
+        # and short-covers are NEVER blocked. Complements the F3 exit reward.
+        if (self.cooldown_candles > 0 and self.position_dir == 0
+                and self.current_step < self._cooldown_until
+                and action in (Action.BUY, Action.SELL)):
+            action = Action.HOLD
+            reward_tag = "cooldown"
+            self._reward_components["cooldown_count"] = \
+                self._reward_components.get("cooldown_count", 0) + 1
 
         # ── Experiment E: Hard Stop-Loss ──────────────────────────────────────
         # Force a SELL if the position drops 2.5% below entry.
@@ -807,6 +823,9 @@ class TradingEnv(gym.Env):
         # F3: stash this trade's realized, fee-adjusted return + hold for the
         # exit-concentrated reward mode (read once at the end of this step()).
         self._just_closed = (net_pnl / (self.position_cost_basis + 1e-12), held_steps)
+        # F7: start the post-trade cooldown — no NEW entries for N candles (anti-churn).
+        if self.cooldown_candles > 0:
+            self._cooldown_until = self.current_step + self.cooldown_candles
 
         old_position_size = self.position_size
         old_direction     = direction
