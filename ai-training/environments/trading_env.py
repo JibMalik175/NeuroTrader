@@ -970,6 +970,13 @@ class TradingEnv(gym.Env):
 
         # Fix 1: Sharpe computed from step-level equity curve
         sharpe = self._compute_sharpe_from_equity()
+        # F9 (Freqtrade hyperopt_loss_sortino/calmar): more robust than Sharpe for our
+        # regime-sensitive, drawdown-prone problem. Sortino penalizes only DOWNSIDE
+        # volatility (so it isn't punished for upside swings); Calmar = return per unit
+        # of max drawdown (rewards smooth equity curves, our actual goal).
+        sortino = self._compute_sortino_from_equity()
+        calmar  = (total_return / 100.0) / self.max_drawdown_seen \
+                  if self.max_drawdown_seen > 1e-6 else 0.0
 
         return {
             "total_return_pct":     round(total_return, 3),
@@ -986,6 +993,8 @@ class TradingEnv(gym.Env):
             "gross_expectancy_pct": econ["gross_expectancy_pct"],
             "net_expectancy_pct":   econ["net_expectancy_pct"],
             "sharpe_ratio":         round(sharpe, 3),
+            "sortino_ratio":        round(sortino, 3),
+            "calmar_ratio":         round(calmar, 3),
             "max_drawdown_pct":     round(self.max_drawdown_seen * 100, 3),
             "avg_hold_candles":     round(np.mean([t.held_steps for t in closed_trades]), 1) if closed_trades else 0.0,
             "raw_action_distribution": dict(self._raw_action_counts),
@@ -1103,6 +1112,27 @@ class TradingEnv(gym.Env):
 
         self.reset()
         return results
+
+    # ── F9: Sortino (downside-only) ───────────────────────────────────────────
+    def _compute_sortino_from_equity(self, risk_free: float = 0.0) -> float:
+        """
+        Annualized Sortino Ratio from the step-level equity curve. Identical to
+        Sharpe but the denominator is the std of NEGATIVE returns only (downside
+        deviation). A model that makes money in sharp upswings isn't penalized for
+        that 'volatility' the way Sharpe penalizes it — a better fit for a trading
+        objective where only downside risk is bad.
+        """
+        if len(self._equity_curve) < 3:
+            return 0.0
+        equity       = np.array(self._equity_curve, dtype=np.float64)
+        step_returns = np.diff(equity) / (equity[:-1] + 1e-10)
+        mean     = step_returns.mean() - risk_free
+        downside = step_returns[step_returns < 0.0]
+        dd_std   = downside.std() if len(downside) > 1 else 0.0
+        if dd_std < 1e-10:
+            return 0.0
+        periods_per_year = self.candles_per_day * 365
+        return float(mean / dd_std * np.sqrt(periods_per_year))
 
     # ── Sharpe — Fix 1 ────────────────────────────────────────────────────────
 
