@@ -174,6 +174,8 @@ class TradingEnv(gym.Env):
         cooldown_candles:   int   = 0,       # F7: block NEW entries for N candles after a close
         regime_router:      bool  = False,   # Phase 2.8: route direction by regime (long in
                                              # uptrends, short in downtrends) — all-weather capstone
+        outlier_threshold:  float = 0.0,     # F10: block entries when a candle is OOD (>0 = on)
+        feature_ref:        tuple = None,    # F10: (mean, std) of TRAIN features for OOD scoring
     ):
         super().__init__()
 
@@ -192,6 +194,7 @@ class TradingEnv(gym.Env):
         self.reward_mode     = reward_mode
         self.cooldown_candles = max(0, int(cooldown_candles))
         self.regime_router   = regime_router
+        self.outlier_threshold = float(outlier_threshold)
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -274,6 +277,20 @@ class TradingEnv(gym.Env):
                 self._regime_trend = self.df["macro_trend_sma"].values.astype(np.float64)
             elif "ema_cross_long" in self.df.columns:
                 self._regime_trend = self.df["ema_cross_long"].values.astype(np.float64)
+
+        # F10: outlier/novelty reference. Score a candle by its mean per-feature
+        # z-distance from the TRAIN distribution; block new entries when a candle is
+        # out-of-distribution (defends generalization — don't trade on regimes the
+        # model never saw). feature_ref=(mean,std) is passed from the train split so
+        # val/test are scored against TRAIN, not their own distribution.
+        self._ood_mean = self._ood_std = None
+        if self.outlier_threshold > 0.0:
+            if feature_ref is not None:
+                self._ood_mean = np.asarray(feature_ref[0], dtype=np.float32)
+                self._ood_std  = np.asarray(feature_ref[1], dtype=np.float32) + 1e-6
+            else:
+                self._ood_mean = self._feature_matrix.mean(axis=0)
+                self._ood_std  = self._feature_matrix.std(axis=0) + 1e-6
 
         self._reset_state()
 
@@ -446,6 +463,20 @@ class TradingEnv(gym.Env):
                 reward_tag = "regime_routed"
                 self._reward_components["regime_routed_count"] = \
                     self._reward_components.get("regime_routed_count", 0) + 1
+
+        # ── F10: Outlier / novelty gate — don't open on out-of-distribution candles ─
+        # Novelty = mean per-feature |z| distance from the TRAIN distribution. If a
+        # candle is too unlike anything in training, the model's edge is unreliable
+        # there, so we sit out rather than trade blind. Only gates NEW entries.
+        if (self.outlier_threshold > 0.0 and self._ood_mean is not None
+                and self.position_dir == 0 and action in (Action.BUY, Action.SELL)):
+            idx = min(self.current_step, len(self._feature_matrix) - 1)
+            z   = np.abs(self._feature_matrix[idx] - self._ood_mean) / self._ood_std
+            if float(z.mean()) > self.outlier_threshold:
+                action = Action.HOLD
+                reward_tag = "outlier_gated"
+                self._reward_components["outlier_gated_count"] = \
+                    self._reward_components.get("outlier_gated_count", 0) + 1
 
         # ── Experiment E: Hard Stop-Loss ──────────────────────────────────────
         # Force a SELL if the position drops 2.5% below entry.
