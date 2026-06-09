@@ -712,6 +712,10 @@ def main():
                         help="F7: block NEW entries for N candles after a trade closes "
                              "(anti-churn cooldown). 0 = off. Exits/covers are never blocked. "
                              "Applies to train + validation/test.")
+    parser.add_argument("--regime-router", action="store_true",
+                        help="Phase 2.8 capstone: route DIRECTION by regime — open longs only "
+                             "in uptrends, shorts only in downtrends (price vs 30d SMA). Makes "
+                             "one model an all-weather trend-follower. Use with --allow-short.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -744,6 +748,10 @@ def main():
         ENV_CONFIG["cooldown_candles"] = args.cooldown
         print(f"[CONFIG] cooldown = {args.cooldown} candles → no new entries for "
               f"{args.cooldown} candles after each close (anti-churn)")
+    if args.regime_router:
+        ENV_CONFIG["regime_router"] = True
+        print(f"[CONFIG] REGIME ROUTER ON → longs only in uptrends, shorts only in "
+              f"downtrends (all-weather trend-follower)")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")
