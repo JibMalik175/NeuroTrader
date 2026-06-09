@@ -295,6 +295,49 @@ def run_validation(model: PPO, val_df: pd.DataFrame, vec_norm: Optional["VecNorm
     return aggregated
 
 
+# ── F6: Best-model-during-training callback ───────────────────────────────────
+
+class BestEvalCallback(BaseCallback):
+    """
+    F6 (Freqtrade MaskableEvalCallback idea, adapted): periodically run our
+    validation DURING training and checkpoint the BEST model so far.
+
+    Why: the FINAL model is frequently overfit/worse than an earlier checkpoint
+    (we see this as the val/test divergence). This saves the best-by-val model
+    (selected on Sortino — robust to our regime sensitivity) so we can deploy it
+    instead of the final one. Opt-in via --eval-every (0 = off) so it never slows
+    default runs (each eval re-runs the 3-slice validation).
+    """
+    def __init__(self, val_df, vec_env, save_prefix, eval_freq, metric="sortino_ratio", verbose=1):
+        super().__init__(verbose)
+        self.val_df      = val_df
+        self.vec_env     = vec_env
+        self.save_prefix = save_prefix
+        self.eval_freq   = eval_freq
+        self.metric      = metric
+        self.best        = -np.inf
+        self.best_step   = 0
+        self.best_saved  = False
+        self._last       = 0
+
+    def _on_step(self) -> bool:
+        if self.eval_freq <= 0:
+            return True
+        if self.num_timesteps - self._last >= self.eval_freq:
+            self._last = self.num_timesteps
+            m   = run_validation(self.model, self.val_df, self.vec_env)
+            val = m.get(self.metric, -1e9)
+            if val > self.best:
+                self.best       = val
+                self.best_step  = self.num_timesteps
+                self.model.save(self.save_prefix + ".zip")
+                self.vec_env.save(self.save_prefix + "_vecnormalize.pkl")
+                self.best_saved = True
+                print(f"\n  [BEST-EVAL] new best {self.metric}={val:.3f} "
+                      f"@ {self.num_timesteps:,} steps → checkpoint saved")
+        return True
+
+
 # ── Walk-Forward Training ─────────────────────────────────────────────────────
 
 def walk_forward_train(
@@ -307,6 +350,7 @@ def walk_forward_train(
     domain_randomization: bool = False,
     curriculum:     bool = False,
     fee_multiplier: float = 1.0,
+    eval_every:     int  = 0,
 ):
     """
     Walk-forward training with independent models per window.
@@ -478,12 +522,20 @@ def walk_forward_train(
         model_type  = "RecurrentPPO" if use_recurrent else "PPO"
         print(f"  [MODEL] Fresh {model_type}: {param_count:,} parameters on {device.upper()}")
 
-        callback = DiagnosticCallback(log_every_n_rollouts=10)
+        callbacks = [DiagnosticCallback(log_every_n_rollouts=10)]
+        # F6: opt-in best-model-during-training checkpoint (selects on robust Sortino).
+        best_cb = None
+        if eval_every > 0:
+            besttrain_prefix = os.path.join(MODELS_DIR, f"{run_name}_window{window_idx}_besttrain")
+            best_cb = BestEvalCallback(val_df, vec_env, besttrain_prefix,
+                                       eval_freq=eval_every, metric="sortino_ratio")
+            callbacks.append(best_cb)
+            print(f"  [BEST-EVAL] best-model checkpointing ON (every {eval_every:,} steps, by Sortino)")
 
         start = time.time()
         model.learn(
             total_timesteps     = window_timesteps,
-            callback            = callback,
+            callback            = callbacks,
             reset_num_timesteps = True,   # Always True — each model is independent
             progress_bar        = True,
             tb_log_name         = f"{run_name}_w{window_idx}",
@@ -522,6 +574,14 @@ def walk_forward_train(
                   f"H={ad.get(0,0)/total_a*100:.1f}% "
                   f"B={ad.get(1,0)/total_a*100:.1f}% "
                   f"S={ad.get(2,0)/total_a*100:.1f}%")
+
+        # F6: overfitting check — did an earlier checkpoint beat the final model?
+        if best_cb is not None and best_cb.best_saved:
+            final_sortino = metrics.get("sortino_ratio", -99)
+            flag = "  <-- earlier checkpoint was BETTER (final is overfit)" if best_cb.best > final_sortino else ""
+            print(f"  [BEST-EVAL] best-during-training Sortino {best_cb.best:.3f} @ {best_cb.best_step:,} "
+                  f"vs final {final_sortino:.3f}{flag}")
+            print(f"             best checkpoint: {run_name}_window{window_idx}_besttrain.zip")
 
         results_log.append({"window": window_idx, "sharpe": sharpe, **metrics})
 
@@ -643,6 +703,11 @@ def main():
                              "return. 'exit': sparse trade-quality reward paying realized NET "
                              "(fee-adjusted) return at close + win bonus + over-hold penalty — "
                              "scalps that don't clear fees score negative (anti-churn).")
+    parser.add_argument("--eval-every", type=int, default=0,
+                        help="F6: if >0, validate every N steps DURING training and checkpoint "
+                             "the best model (by Sortino) as <run>_window<W>_besttrain.zip. "
+                             "Combats overfitting (final model is often worse than an earlier one). "
+                             "0 = off (default) so normal runs aren't slowed.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -692,6 +757,7 @@ def main():
         domain_randomization = args.domain_randomization,
         curriculum      = args.curriculum,
         fee_multiplier  = args.fee_multiplier,
+        eval_every      = args.eval_every,
     )
 
     # ── Optional Final Test ───────────────────────────────────────────────────
