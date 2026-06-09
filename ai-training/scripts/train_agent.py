@@ -638,6 +638,11 @@ def main():
                              "(BUY moves short->flat->long, SELL moves long->flat->short). "
                              "Lets the agent profit in down markets instead of only avoiding "
                              "them. Keeps RecurrentPPO/LSTM (no MaskablePPO).")
+    parser.add_argument("--reward-mode", type=str, default="fixb", choices=["fixb", "exit"],
+                        help="F3 reward mode. 'fixb' (default): dense per-step portfolio "
+                             "return. 'exit': sparse trade-quality reward paying realized NET "
+                             "(fee-adjusted) return at close + win bonus + over-hold penalty — "
+                             "scalps that don't clear fees score negative (anti-churn).")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -662,6 +667,10 @@ def main():
         ENV_CONFIG["allow_short"] = True
         print(f"[CONFIG] SHORTING ON → 3-action ladder (short <-> flat <-> long), "
               f"agent can profit in down markets")
+    if args.reward_mode != "fixb":
+        ENV_CONFIG["reward_mode"] = args.reward_mode
+        print(f"[CONFIG] reward_mode = '{args.reward_mode}' → exit-concentrated NET-return "
+              f"reward (anti-churn): scalps that don't clear fees score negative")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")
