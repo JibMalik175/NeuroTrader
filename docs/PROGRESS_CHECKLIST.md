@@ -66,6 +66,23 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 - [ ] ⬜ (deferred) re-test shorting AFTER F3 reward lands
 - [ ] ⬜ (deferred) directional SHORT gate (short only in downtrends) once shorting is disciplined
 
+### NEW finds from deeper Freqtrade sweep (2026-06-09) — not yet evaluated
+- [ ] ⬜ **F8 Transformer option** — Freqtrade has `PyTorchTransformerRegressor`. A transformer
+       captures longer-range dependencies than our LSTM (relates to "long-term memory" goal).
+       Note: it's a SUPERVISED predictor, not RL — would be an alternate/ensemble approach, bigger lift.
+- [ ] ⬜ **F9 Better hyperopt objectives** — Freqtrade has 13 `hyperopt_loss` objectives
+       (Sortino, Calmar, profit_drawdown, max_drawdown_relative, short_trade_dur, multi_metric).
+       We have `hyperparameter_sweep.py` (Optuna) — adopt Sortino/Calmar/profit-drawdown as the
+       tuning objective instead of raw Sharpe (more robust to our regime sensitivity).
+- [ ] ⬜ **F10 Outlier / novelty detection** (FreqAI data_kitchen: DI threshold, SVM, DBSCAN) —
+       skip trading on out-of-distribution candles. Could directly help the generalization/regime
+       problem (don't act when the market looks unlike training). Verify method names before building.
+
+### NOT relevant to us (deliberately skipping — don't chase these)
+Exchange abstraction, pairlist managers, Telegram/RPC, the full backtesting engine (we have
+env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverage/liquidation
+(only if we go futures), gradient-boosted supervised models (LightGBM/XGBoost = different approach).
+
 ---
 
 ## Deploy bar (unchanged)
