@@ -168,6 +168,7 @@ class TradingEnv(gym.Env):
         candles_per_day:    int   = 96,      # Fix 1: explicit timeframe param for Sharpe
         min_adx:            float = None,    # Phase 2.3: regime gate (raw ADX threshold)
         require_uptrend:    bool  = False,   # Phase 2.3b: long only in confirmed uptrends
+        allow_short:        bool  = False,   # Phase 2.4: enable short positions (3-action ladder)
     ):
         super().__init__()
 
@@ -182,6 +183,7 @@ class TradingEnv(gym.Env):
         self.domain_randomization = domain_randomization
         self.min_adx         = min_adx
         self.require_uptrend = require_uptrend
+        self.allow_short     = allow_short
         # Fix 1: store candles_per_day for use in _compute_sharpe.
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
@@ -264,6 +266,10 @@ class TradingEnv(gym.Env):
         self.balance             = self.initial_balance
         self.peak_balance        = self.initial_balance
         self.position_held       = False
+        # Phase 2.4: direction-aware position. 0 = flat, +1 = long, -1 = short.
+        # position_held stays in sync as (position_dir != 0). For long-only runs
+        # this is only ever 0 or +1, so all PnL/portfolio math is identical to before.
+        self.position_dir        = 0
         self.entry_price         = 0.0
         self.position_size       = 0.0      # Fraction of balance in position
         # Fix 7: track exact cash allocated at entry so SELL fee math is correct
@@ -387,9 +393,12 @@ class TradingEnv(gym.Env):
         # This replaces soft penalties and forces the agent to learn better entries
         # while mathematically guaranteeing we cannot hold giant losers.
         if action == Action.HOLD and self.position_held:
-            unrealized = (current_price - self.entry_price) / (self.entry_price + 1e-8)
+            # Phase 2.4: direction-aware unrealized PnL (long: price up = profit;
+            # short: price down = profit). The closing action differs by side —
+            # SELL closes a long, BUY covers a short.
+            unrealized = self.position_dir * (current_price - self.entry_price) / (self.entry_price + 1e-8)
             if unrealized <= -0.025:
-                action = Action.SELL
+                action = Action.BUY if self.position_dir == -1 else Action.SELL
                 reward_tag = "hard_stop_loss"
                 self._reward_components["stop_loss_count"] = self._reward_components.get("stop_loss_count", 0) + 1
 
@@ -412,6 +421,7 @@ class TradingEnv(gym.Env):
                 self.position_cost_basis = cash_allocated - entry_fee
                 self.entry_price         = fill_price
                 self.position_held       = True
+                self.position_dir        = 1     # Phase 2.4: long
                 self.position_size       = self.position_fraction
                 self._steps_in_position  = 0
                 self._steps_since_trade  = 0
@@ -473,6 +483,7 @@ class TradingEnv(gym.Env):
                 old_position_size = self.position_size
 
                 self.position_held       = False
+                self.position_dir        = 0     # Phase 2.4: back to flat
                 self.entry_price         = 0.0
                 self.position_size       = 0.0
                 self.position_cost_basis = 0.0
@@ -812,7 +823,9 @@ class TradingEnv(gym.Env):
         """Total portfolio value accounting for any open fractional position."""
         if not self.position_held:
             return self.balance
-        unrealized_pnl_pct = (current_price - self.entry_price) / (self.entry_price + 1e-8)
+        # Phase 2.4: direction-aware. For a long (dir=+1) this is the usual
+        # (price-entry)/entry; for a short (dir=-1) it flips to (entry-price)/entry.
+        unrealized_pnl_pct = self.position_dir * (current_price - self.entry_price) / (self.entry_price + 1e-8)
         return self.balance + self.position_cost_basis * unrealized_pnl_pct
 
     # region agent log
