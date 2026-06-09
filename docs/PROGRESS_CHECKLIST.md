@@ -62,9 +62,11 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
        to Freqtrade's fee-in-price. Implementing it would be a no-op refactor. Verified, not needed.
 - [ ] ⬜ **F5 MinMaxScaler(-1,1) feature norm fit on train** — replaces VecNormalize-obs; kills the
        ONNX-baking headache; optional PCA for the 1543-dim obs
-- [ ] ⬜ **F6 EvalCallback best-model-during-training** (save best checkpoint by val during learn)
-- [ ] ⬜ **F7 Execution-engine protections** (TS): cooldown_period, stoploss_guard,
-       max_drawdown halt, low_profit — port to executioner
+- [x] **F6 EvalCallback best-model-during-training** ✅ — `--eval-every N` checkpoints best model
+       by Sortino during training + overfit report. Opt-in (0=off). Verified by smoke test.
+- [~] **F7 Protections** — cooldown_period ✅ DONE in the env (`--cooldown N`, anti-churn,
+       verified). ⬜ REMAINING (execution-engine/TS, live safety): stoploss_guard (halt after N
+       stops in a window), max_drawdown halt, low_profit — port to `riskManager.ts`.
 - [ ] ⬜ (deferred) re-test shorting AFTER F3 reward lands
 - [ ] ⬜ (deferred) directional SHORT gate (short only in downtrends) once shorting is disciplined
 
