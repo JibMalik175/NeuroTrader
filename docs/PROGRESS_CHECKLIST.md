@@ -57,7 +57,9 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
        Compare with `compare_runs.py` vs p2_4_longshort (churn) and p2_tf1h. Watch: trades DOWN,
        avg-hold UP, net PF UP. If exit-reward alone over-holds, tune MAX_HOLD/FACTOR in
        `_compute_exit_reward`. May also A/B `--reward-mode exit` WITHOUT `--allow-short` first.
-- [ ] ⬜ **F4 Fee-in-price model** (`add_entry_fee`/`add_exit_fee`) — PnL inherently net of fees
+- [x] **F4 Fee-in-price model** — ✅ DONE-BY-EQUIVALENCE (skipped). Our env already charges fee on
+       entry+exit notional (`cost_basis=cash×(1−fee)`, `net=gross×(1−fee)`) = mathematically identical
+       to Freqtrade's fee-in-price. Implementing it would be a no-op refactor. Verified, not needed.
 - [ ] ⬜ **F5 MinMaxScaler(-1,1) feature norm fit on train** — replaces VecNormalize-obs; kills the
        ONNX-baking headache; optional PCA for the 1543-dim obs
 - [ ] ⬜ **F6 EvalCallback best-model-during-training** (save best checkpoint by val during learn)
@@ -70,10 +72,9 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 - [ ] ⬜ **F8 Transformer option** — Freqtrade has `PyTorchTransformerRegressor`. A transformer
        captures longer-range dependencies than our LSTM (relates to "long-term memory" goal).
        Note: it's a SUPERVISED predictor, not RL — would be an alternate/ensemble approach, bigger lift.
-- [ ] ⬜ **F9 Better hyperopt objectives** — Freqtrade has 13 `hyperopt_loss` objectives
-       (Sortino, Calmar, profit_drawdown, max_drawdown_relative, short_trade_dur, multi_metric).
-       We have `hyperparameter_sweep.py` (Optuna) — adopt Sortino/Calmar/profit-drawdown as the
-       tuning objective instead of raw Sharpe (more robust to our regime sensitivity).
+- [x] **F9 Better metrics/objectives** — ✅ Sortino + Calmar added to env episode metrics + run_validation
+       + training_log + compare_runs (more robust than our noisy Sharpe). ⬜ REMAINING: wire them as the
+       Optuna objective in `hyperparameter_sweep.py` (currently uses Sharpe), and as best-model selection.
 - [ ] ⬜ **F10 Outlier / novelty detection** (FreqAI data_kitchen: DI threshold, SVM, DBSCAN) —
        skip trading on out-of-distribution candles. Could directly help the generalization/regime
        problem (don't act when the market looks unlike training). Verify method names before building.
