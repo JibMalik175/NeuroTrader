@@ -1,6 +1,6 @@
 # TradeBot — Improvement Progress Checklist
 
-**Single source of truth for resuming work.** Last updated: 2026-06-09.
+**Single source of truth for resuming work.** Last updated: 2026-06-10.
 Legend: ✅ done · 🔄 in progress · ⬜ not started · ❌ tried, didn't help (kept gated/reverted)
 
 ---
@@ -50,13 +50,8 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 
 - [x] **F1 Direction-aware position engine** (position_dir, generalized PnL) — shorting foundation
 - [x] **F2 Shorting via 3-action ladder** (env engine `_open/_close_position` + `--allow-short`)
-- [x] **F3 Exit-concentrated reward** (`--reward-mode exit`) — IMPLEMENTED + unit-verified (fixb
-       unchanged; exit is sparse & pays NET return so churn scores negative). **NOT yet validated
-       by a training run.** ⬅️ **NEXT ACTION: run the A/B** to see if it fixes the shorting churn:
-       `python scripts\train_agent.py --train data\BTC_USDT_1h_train.parquet --val data\BTC_USDT_1h_val.parquet --test data\BTC_USDT_1h_test.parquet --timesteps 200000 --windows 1 --run-name p2_5_exit_short --recurrent --n-envs 4 --candles-per-day 24 --allow-short --reward-mode exit`
-       Compare with `compare_runs.py` vs p2_4_longshort (churn) and p2_tf1h. Watch: trades DOWN,
-       avg-hold UP, net PF UP. If exit-reward alone over-holds, tune MAX_HOLD/FACTOR in
-       `_compute_exit_reward`. May also A/B `--reward-mode exit` WITHOUT `--allow-short` first.
+- [x] **F3 Exit-concentrated reward** (`--reward-mode exit`) — ✅ VALIDATED by runs: tamed the
+       shorting churn (130→41-59 trades), enabled the p2_6/p2_8 results. Keep.
 - [x] **F4 Fee-in-price model** — ✅ DONE-BY-EQUIVALENCE (skipped). Our env already charges fee on
        entry+exit notional (`cost_basis=cash×(1−fee)`, `net=gross×(1−fee)`) = mathematically identical
        to Freqtrade's fee-in-price. Implementing it would be a no-op refactor. Verified, not needed.
@@ -64,22 +59,23 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
        ONNX-baking headache; optional PCA for the 1543-dim obs
 - [x] **F6 EvalCallback best-model-during-training** ✅ — `--eval-every N` checkpoints best model
        by Sortino during training + overfit report. Opt-in (0=off). Verified by smoke test.
-- [~] **F7 Protections** — cooldown_period ✅ DONE in the env (`--cooldown N`, anti-churn,
-       verified). ⬜ REMAINING (execution-engine/TS, live safety): stoploss_guard (halt after N
-       stops in a window), max_drawdown halt, low_profit — port to `riskManager.ts`.
-- [ ] ⬜ (deferred) re-test shorting AFTER F3 reward lands
-- [ ] ⬜ (deferred) directional SHORT gate (short only in downtrends) once shorting is disciplined
+- [~] **F7 Protections** — cooldown_period ✅ DONE in env (`--cooldown N`). ✅ riskManager.ts now
+       has `canOpenPosition()` (kill/breaker/cooldown-after-stop/stoploss-guard/peak-DD/low-profit)
+       + `recordTradeOutcome()`. ⬜ REMAINING: wire both into `executioner.ts` call sites; run
+       `npx tsc --noEmit` after `npm install`.
+- [x] (was deferred) re-test shorting AFTER F3 reward — done (p2_6_disc_short, p2_7_400k)
+- [x] (was deferred) directional SHORT gate — done as **regime router** (p2_8, see below)
 
 ### NEW finds from deeper Freqtrade sweep (2026-06-09) — not yet evaluated
 - [ ] ⬜ **F8 Transformer option** — Freqtrade has `PyTorchTransformerRegressor`. A transformer
        captures longer-range dependencies than our LSTM (relates to "long-term memory" goal).
        Note: it's a SUPERVISED predictor, not RL — would be an alternate/ensemble approach, bigger lift.
-- [x] **F9 Better metrics/objectives** — ✅ Sortino + Calmar added to env episode metrics + run_validation
-       + training_log + compare_runs (more robust than our noisy Sharpe). ⬜ REMAINING: wire them as the
-       Optuna objective in `hyperparameter_sweep.py` (currently uses Sharpe), and as best-model selection.
-- [ ] ⬜ **F10 Outlier / novelty detection** (FreqAI data_kitchen: DI threshold, SVM, DBSCAN) —
-       skip trading on out-of-distribution candles. Could directly help the generalization/regime
-       problem (don't act when the market looks unlike training). Verify method names before building.
+- [x] **F9 Better metrics/objectives** — ✅ FULLY DONE: Sortino + Calmar in env metrics, run_validation,
+       training_log, compare_runs, BestEvalCallback selection, AND Optuna `--objective` flag
+       (default sortino_ratio).
+- [x] **F10 Outlier / novelty detection** — ✅ DONE: mean per-feature |z| vs TRAIN distribution
+       (`--outlier-threshold`, feature_ref plumbed so val/test score against train stats). Gated
+       opt-in; not yet A/B'd in a training run.
 
 ### NOT relevant to us (deliberately skipping — don't chase these)
 Exchange abstraction, pairlist managers, Telegram/RPC, the full backtesting engine (we have
@@ -92,7 +88,11 @@ env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverag
 gross PF > 1.2 AND net PF > 1.0 across all 3 validation slices, ≥30 trades/slice, beating
 buy-and-hold per regime. Then: ONNX export → feature parity → paper trade (MOCK→PAPER→TESTNET→LIVE).
 
-## Honest status
-Real but thin edge (gross PF ~1.1-1.6) that fees eat out-of-sample. Long-only capped; shorting
-churns without discipline. F3 (better reward) is the most promising lever left. Realistic odds
-of a deployable small edge: ~1-in-3 to 1-in-4. Risk $0 until paper trading proves it.
+## Honest status (post-capstone, 2026-06-10)
+**p2_8 regime router = best model of the entire ladder** (val Sharpe −0.94, gross PF 1.386,
+gExp +0.132%/trade ≈ 2× the plain-1h edge) — and it STILL sits under the 0.20% fee bar
+(net PF 0.879 val / 0.60 test). 20+ runs across every lever show gross edge asymptoting
+below fees. Reward/gate tuning is EXHAUSTED. Remaining honest paths: (1) cut the fee bar —
+BNB discount + maker/limit entries would make +0.132% net-positive (execution fix, not model
+fix); (2) F8 transformer or 2017+ data (new information); (3) paper-trade the router to prove
+the pipeline with $0 at risk. Risk $0 until paper trading proves an edge.
