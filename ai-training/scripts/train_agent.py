@@ -708,6 +708,10 @@ def main():
                              "the best model (by Sortino) as <run>_window<W>_besttrain.zip. "
                              "Combats overfitting (final model is often worse than an earlier one). "
                              "0 = off (default) so normal runs aren't slowed.")
+    parser.add_argument("--cooldown", type=int, default=0,
+                        help="F7: block NEW entries for N candles after a trade closes "
+                             "(anti-churn cooldown). 0 = off. Exits/covers are never blocked. "
+                             "Applies to train + validation/test.")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -736,6 +740,10 @@ def main():
         ENV_CONFIG["reward_mode"] = args.reward_mode
         print(f"[CONFIG] reward_mode = '{args.reward_mode}' → exit-concentrated NET-return "
               f"reward (anti-churn): scalps that don't clear fees score negative")
+    if args.cooldown > 0:
+        ENV_CONFIG["cooldown_candles"] = args.cooldown
+        print(f"[CONFIG] cooldown = {args.cooldown} candles → no new entries for "
+              f"{args.cooldown} candles after each close (anti-churn)")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")
