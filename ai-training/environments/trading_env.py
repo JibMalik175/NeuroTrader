@@ -176,6 +176,7 @@ class TradingEnv(gym.Env):
                                              # uptrends, short in downtrends) — all-weather capstone
         outlier_threshold:  float = 0.0,     # F10: block entries when a candle is OOD (>0 = on)
         feature_ref:        tuple = None,    # F10: (mean, std) of TRAIN features for OOD scoring
+        feature_scaler:     tuple = None,    # F5: (min, max) of TRAIN features → scale to [-1,1]
     ):
         super().__init__()
 
@@ -243,6 +244,23 @@ class TradingEnv(gym.Env):
             self.df[self._active_features].values.astype(np.float32),
             nan=0.0,
         )
+
+        # ── F5 (Freqtrade data_kitchen): MinMaxScaler(-1,1) fit on TRAIN ──────
+        # Deterministic feature normalization: x → 2·(x−min)/(max−min) − 1 using
+        # the TRAIN split's per-feature min/max (passed in via feature_scaler so
+        # val/test are scaled by TRAIN stats, never their own). Replaces
+        # VecNormalize obs statistics, which otherwise have to be baked into the
+        # ONNX export. Val/test values outside the train range fall outside
+        # [-1,1] by design; clip at ±5 to bound extremes without erasing the
+        # novelty signal. Note: when this is on, F10's OOD reference must also
+        # be computed on SCALED features (the train script orders F5 before F10).
+        self.feature_scaler = feature_scaler
+        if feature_scaler is not None:
+            _f_min = np.asarray(feature_scaler[0], dtype=np.float32)
+            _f_rng = np.maximum(
+                np.asarray(feature_scaler[1], dtype=np.float32) - _f_min, 1e-9)
+            self._feature_matrix = np.clip(
+                2.0 * (self._feature_matrix - _f_min) / _f_rng - 1.0, -5.0, 5.0)
 
         # ── Phase 2.3: regime gate precompute ────────────────────────────────
         # The 'adx' feature is stored normalized as (adx_raw - 25) / 25, clipped
