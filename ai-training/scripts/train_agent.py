@@ -351,6 +351,7 @@ def walk_forward_train(
     curriculum:     bool = False,
     fee_multiplier: float = 1.0,
     eval_every:     int  = 0,
+    norm_obs:       bool = True,   # F5: False when minmax feature scaling replaces VecNormalize-obs
 ):
     """
     Walk-forward training with independent models per window.
@@ -484,9 +485,11 @@ def walk_forward_train(
 
         # Fix 4: fresh VecNormalize per window — no statistics carried over
         # between independent models (carrying stats would couple the windows).
+        # F5: when minmax feature scaling is active the obs are already in [-1,1]
+        # deterministically, so VecNormalize only normalizes the REWARD stream.
         vec_env = VecNormalize(
             raw_vec_env,
-            norm_obs=True,
+            norm_obs=norm_obs,
             norm_reward=True,
             clip_obs=10.0,
             clip_reward=10.0,
@@ -720,6 +723,12 @@ def main():
                         help="F10: if >0, skip opening positions on out-of-distribution candles "
                              "(mean per-feature |z| from the TRAIN distribution > threshold). "
                              "Defends generalization. Try ~2.0-3.0. 0 = off.")
+    parser.add_argument("--feature-scaling", type=str, default="none",
+                        choices=["none", "minmax"],
+                        help="F5 (Freqtrade data_kitchen): 'minmax' scales every feature to "
+                             "[-1,1] using the TRAIN split's min/max (deterministic — replaces "
+                             "VecNormalize obs stats and kills the ONNX-baking headache). "
+                             "Val/test are scaled by TRAIN stats. Default 'none' (VecNormalize).")
     args = parser.parse_args()
 
     # Override global N_ENVS if specified
@@ -766,6 +775,19 @@ def main():
 
     print(f"\n[DATA] Train: {len(train_df):,} rows | Val: {len(val_df):,} rows")
 
+    # F5: fit MinMaxScaler(-1,1) on the TRAIN features, inject into ENV_CONFIG so
+    # train/val/test all scale by TRAIN min/max. MUST run before the F10 block so
+    # the OOD reference is computed on the same (scaled) features the envs will see.
+    if args.feature_scaling == "minmax":
+        _f_cfg = {k: v for k, v in ENV_CONFIG.items()
+                  if k not in ("feature_scaler", "outlier_threshold", "feature_ref")}
+        _tmp = TradingEnv(train_df, **_f_cfg)
+        _fm = _tmp._feature_matrix
+        ENV_CONFIG["feature_scaler"] = (_fm.min(axis=0), _fm.max(axis=0))
+        del _tmp, _fm
+        print("[CONFIG] F5 minmax feature scaling ON → features scaled to [-1,1] by "
+              "TRAIN min/max; VecNormalize obs normalization OFF (reward norm stays)")
+
     # F10: fit the outlier reference (mean,std) on the TRAIN feature distribution,
     # then inject into ENV_CONFIG so train/val/test all score novelty vs TRAIN.
     if args.outlier_threshold > 0:
@@ -791,6 +813,7 @@ def main():
         curriculum      = args.curriculum,
         fee_multiplier  = args.fee_multiplier,
         eval_every      = args.eval_every,
+        norm_obs        = (args.feature_scaling != "minmax"),
     )
 
     # ── Optional Final Test ───────────────────────────────────────────────────
