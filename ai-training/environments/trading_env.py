@@ -46,7 +46,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import pandas as pd
-import json
 from enum import IntEnum
 from dataclasses import dataclass, field
 from typing import Optional
@@ -111,8 +110,6 @@ class TradingEnv(gym.Env):
     """
 
     metadata = {"render_modes": ["human"]}
-    DEBUG_LOG_PATH = "debug-627897.log"
-    DEBUG_SESSION_ID = "627897"
 
     FEATURE_COLS = [
         "log_return", "log_return_h", "log_return_l", "log_return_v",
@@ -385,12 +382,6 @@ class TradingEnv(gym.Env):
         # Priority 1: sell decision log (capped per episode)
         self._sell_log = []
         self._max_sell_logs = 50
-        self._debug_flags = {
-            "entry_logged": False,
-            "exit_logged": False,
-            "invalid_logged": False,
-            "hold_logged": False,
-        }
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -558,45 +549,11 @@ class TradingEnv(gym.Env):
                 # preferred to absorb the slow bleed rather than take a realized
                 # -5% loss. Replaced by a hard -2.5% stop-loss above.
 
-                # region agent log
-                if (not self._debug_flags["hold_logged"]) and self._steps_in_position >= 20:
-                    self._debug_log(
-                        run_id="fix-b",
-                        hypothesis_id="H3",
-                        location="trading_env.py:HOLD_MTM",
-                        message="Long hold mark-to-market snapshot",
-                        data={
-                            "step": int(self.current_step),
-                            "steps_in_position": int(self._steps_in_position),
-                            "price_change_pct": float(price_change_pct),
-                            "position_size": float(self.position_size),
-                            "mtm_component_diagnostic": float(mtm_component),
-                        },
-                    )
-                    self._debug_flags["hold_logged"] = True
-                # endregion
-
                 # reward carries any accumulated penalty forward to the portfolio return += below
             else:
                 # No penalty for flat HOLD — being cautious is fine
                 reward = 0.0
                 self._steps_since_trade += 1
-
-        if invalid_remap and not self._debug_flags["invalid_logged"]:
-            self._debug_log(
-                run_id="experiment-a",
-                hypothesis_id="A",
-                location="trading_env.py:INVALID_REMAP",
-                message="First invalid action remapped to HOLD",
-                data={
-                    "step": int(self.current_step),
-                    "raw_action": int(raw_action),
-                    "effective_action": int(action),
-                    "invalid_action_count": float(self._reward_components["invalid_action_count"]),
-                    "invalid_action_reward": float(self._reward_components["invalid_action"]),
-                },
-            )
-            self._debug_flags["invalid_logged"] = True
 
         # ── Update Peak & Drawdown ────────────────────────────────────────────
         portfolio_value = self._get_portfolio_value(current_price)
@@ -672,98 +629,6 @@ class TradingEnv(gym.Env):
             info["raw_action_counts"] = dict(self._raw_action_counts)
             info["action_counts"]     = dict(self._action_counts)
             info["reward_components"] = dict(self._reward_components)
-        # region agent log
-        if terminated:
-            component_totals = {k: float(v) for k, v in self._reward_components.items()}
-            component_for_total = {k: v for k, v in component_totals.items() if not k.endswith("_count")}
-            total_reward_components = float(sum(component_for_total.values()))
-            component_pct = {}
-            denom = abs(total_reward_components)
-            for k, v in component_for_total.items():
-                component_pct[k] = float((v / denom) * 100.0) if denom > 1e-12 else 0.0
-            # Priority 2: compute mean absolute magnitudes
-            mean_abs = {}
-            for k in self._reward_abs_sums:
-                n = self._reward_abs_counts[k]
-                mean_abs[k] = float(self._reward_abs_sums[k] / n) if n > 0 else 0.0
-
-            # Priority 1+3: sell summary stats
-            # Experiment C additions: Case 1 vs Case 2 diagnostic metrics
-            sell_summary = {}
-            if self._sell_log:
-                sell_rewards = [s["total_sell_reward"] for s in self._sell_log]
-                sell_pnls   = [s["pnl_pct"] for s in self._sell_log]
-                sell_gross  = [s["gross_pnl"] for s in self._sell_log]
-                sell_fees   = [s["fees_paid"] for s in self._sell_log]
-                sell_net    = [s["net_pnl"] for s in self._sell_log]
-                winners     = [s for s in self._sell_log if s["was_winner"]]
-                losers      = [s for s in self._sell_log if not s["was_winner"]]
-
-                winner_pnls  = [s["pnl_pct"] for s in winners]
-                loser_pnls   = [s["pnl_pct"] for s in losers]
-                winner_holds = [s["held_steps"] for s in winners]
-                loser_holds  = [s["held_steps"] for s in losers]
-                winner_gross = [s["gross_pnl"] for s in winners]
-                loser_gross  = [s["gross_pnl"] for s in losers]
-
-                sell_summary = {
-                    # ── Core counts ──────────────────────────────────────────
-                    "n_sells":   len(self._sell_log),
-                    "n_winners": len(winners),
-                    "n_losers":  len(losers),
-                    # ── Reward quality ───────────────────────────────────────
-                    "mean_sell_reward":   float(np.mean(sell_rewards)),
-                    "mean_winner_reward": float(np.mean([s["total_sell_reward"] for s in winners])) if winners else 0.0,
-                    "mean_loser_reward":  float(np.mean([s["total_sell_reward"] for s in losers]))  if losers  else 0.0,
-                    # ── PnL quality (Case 1 vs 2 diagnostics) ───────────────
-                    "mean_sell_pnl_pct":    float(np.mean(sell_pnls)),
-                    "mean_winner_pnl_pct":  float(np.mean(winner_pnls))            if winner_pnls else 0.0,
-                    "mean_loser_pnl_pct":   float(np.mean(loser_pnls))             if loser_pnls  else 0.0,
-                    "median_winner_pnl_pct": float(np.median(winner_pnls))         if winner_pnls else 0.0,
-                    "median_loser_pnl_pct":  float(np.median(loser_pnls))          if loser_pnls  else 0.0,
-                    "largest_winner_pnl_pct": float(max(winner_pnls))              if winner_pnls else 0.0,
-                    "largest_loser_pnl_pct":  float(min(loser_pnls))               if loser_pnls  else 0.0,
-                    "largest_winner_gross":   float(max(winner_gross))              if winner_gross else 0.0,
-                    "largest_loser_gross":    float(min(loser_gross))               if loser_gross  else 0.0,
-                    # ── Hold duration by outcome ──────────────────────────────
-                    "mean_hold_duration":    float(np.mean([s["held_steps"] for s in self._sell_log])),
-                    "mean_hold_winner":      float(np.mean(winner_holds))           if winner_holds else 0.0,
-                    "mean_hold_loser":       float(np.mean(loser_holds))            if loser_holds  else 0.0,
-                    "median_hold_winner":    float(np.median(winner_holds))         if winner_holds else 0.0,
-                    "median_hold_loser":     float(np.median(loser_holds))          if loser_holds  else 0.0,
-                    "max_hold_winner":       int(max(winner_holds))                 if winner_holds else 0,
-                    "max_hold_loser":        int(max(loser_holds))                  if loser_holds  else 0,
-                    # ── Totals ───────────────────────────────────────────────
-                    "gross_pnl_before_fees": float(np.sum(sell_gross)),
-                    "fees_paid":             float(np.sum(sell_fees)),
-                    "net_pnl":               float(np.sum(sell_net)),
-                    # ── Sample trades (expanded for Case 1 vs 2 analysis) ────
-                    "first_20_sells": self._sell_log[:20],
-                }
-
-            trade_economics = self._get_trade_economics()
-            self._debug_log(
-                run_id="experiment-a",
-                hypothesis_id="H4",
-                location="trading_env.py:EPISODE_END",
-                message="Episode reward/action summary",
-                data={
-                    "episode_steps": int(self._step_count),
-                    "raw_actions": {str(k): int(v) for k, v in self._raw_action_counts.items()},
-                    "actions": {str(k): int(v) for k, v in self._action_counts.items()},
-                    "reward_components": component_totals,
-                    "total_reward_components": total_reward_components,
-                    "reward_component_pct_of_abs_total": component_pct,
-                    "mean_abs_reward_per_step": mean_abs,
-                    "sell_summary": sell_summary,
-                    "trade_economics": trade_economics,
-                    "total_trades": int(len(self.trade_history)),
-                    "portfolio_value": float(portfolio_value),
-                    "drawdown": float(drawdown),
-                },
-            )
-        # endregion
-
         return obs, reward * self.reward_scaling, terminated, truncated, info
 
     # ── Observation Builder ───────────────────────────────────────────────────
@@ -993,24 +858,6 @@ class TradingEnv(gym.Env):
                 self._reward_components.get("overhold_penalty", 0.0) + pen
             return pen
         return 0.0
-
-    # region agent log
-    def _debug_log(self, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
-        payload = {
-            "sessionId": self.DEBUG_SESSION_ID,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(pd.Timestamp.utcnow().timestamp() * 1000),
-        }
-        try:
-            with open(self.DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-        except Exception:
-            pass
-    # endregion
 
     def _get_info(self, portfolio_value: float = None, drawdown: float = None,
                   include_economics: bool = False) -> dict:
