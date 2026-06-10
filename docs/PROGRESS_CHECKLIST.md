@@ -117,6 +117,31 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
 - [x] **G8 Leverage guard** — ✅ `LEVERAGE` env (default 1); canOpenPosition() hard-blocks ≠1x
        until liquidation handling exists.
 
+## OctoBot deep-dive (2026-06-11) — second open-source bot, monorepo at
+## `C:\Users\Jibran Malik\Downloads\OctoBot-master\OctoBot-master` (READ-ONLY)
+OctoBot's identity vs Freqtrade: NON-PREDICTIVE strategy modes (grid, staggered orders,
+market making, DCA, index) + heterogeneous signal matrix (TA/social/RT evaluators) + new
+LLM agent-team layer (ai_trading_mode, packages/agents). Backlog, prioritized for us:
+
+- [ ] ⬜ **H4 Two-model agreement gate** (their evaluator-matrix idea, applied to our ensemble) —
+       trade only when p2_8 AND p2_9 besttrain checkpoints agree on direction; expect fewer,
+       higher-conviction trades. Pure evaluation with existing artifacts + fee sweep. DO FIRST.
+- [ ] ⬜ **H1 Flat-regime grid overlay** (grid/staggered_orders modes) — our router is ~95% flat
+       BY DESIGN; a tight ATR-sized grid could monetize the chop it sits out. Gate: only when
+       regime-flat AND model-flat; must prove +EV after maker fees in a backtest harness first.
+- [ ] ⬜ **H3 Alternative-data features V5** (their social evaluators, made rigorous) — funding
+       rate + open interest histories are backfillable from Binance futures API → features
+       (funding level/momentum, OI change) → A/B retrain. Their Google-Trends/Reddit signals are
+       NOT cleanly backfillable — skip those.
+- [ ] ⬜ **H2 Order-book-aware maker placement** (simple_market_making mode: min/max spread,
+       book distribution) — place inside the spread at a configurable offset instead of AT best
+       bid/ask; reduces adverse selection on our post-only fills. Refine MAKER-1/G5.
+- [ ] ⬜ **H5 LLM analyst, advisory-only** (ai_trading_mode agent teams) — daily report agent
+       reading trades/metrics; NEVER in the trade loop. Optional/fun.
+- Skipping deliberately: web/mobile/Telegram UI (command-center exists), profiles/cloud/copy-
+  trading, index/basket modes (single pair), their backtest engine, DSL mode, arbitrage
+  (multi-exchange), strategy_optimizer (we have Optuna).
+
 ### NOT relevant to us (deliberately skipping — don't chase these)
 Exchange abstraction, pairlist managers, Telegram/RPC, the full backtesting engine (we have
 env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverage/liquidation
