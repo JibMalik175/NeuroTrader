@@ -70,54 +70,6 @@ LOGS_DIR   = os.path.join(os.path.dirname(__file__), "..", "logs")
 
 # Number of parallel environments for SubprocVecEnv
 N_ENVS = 4
-DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "debug-627897.log")
-DEBUG_SESSION_ID = "627897"
-
-
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
-    payload = {
-        "sessionId": DEBUG_SESSION_ID,
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
-
-def _extract_action_probs(model, policy_obs: np.ndarray, lstm_state, episode_start: np.ndarray) -> tuple[list[float] | None, str | None]:
-    try:
-        obs_tensor, _ = model.policy.obs_to_tensor(np.array([policy_obs], dtype=np.float32))
-        episode_start_tensor = torch.as_tensor(episode_start, device=obs_tensor.device)
-        with torch.no_grad():
-            dist = None
-            try:
-                dist = model.policy.get_distribution(
-                    obs_tensor, lstm_states=lstm_state, episode_starts=episode_start_tensor
-                )
-            except TypeError:
-                try:
-                    dist = model.policy.get_distribution(
-                        obs_tensor, lstm_state=lstm_state, episode_start=episode_start_tensor
-                    )
-                except TypeError:
-                    dist = model.policy.get_distribution(obs_tensor)
-
-            probs_tensor = getattr(dist.distribution, "probs", None)
-            if probs_tensor is None:
-                return None, "distribution_has_no_probs"
-            probs = probs_tensor.detach().cpu().numpy().reshape(-1)
-            if probs.shape[0] < 3:
-                return None, f"unexpected_prob_shape_{probs.shape[0]}"
-            return [float(probs[0]), float(probs[1]), float(probs[2])], None
-    except Exception as e:
-        return None, f"{type(e).__name__}:{e}"
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
@@ -234,38 +186,6 @@ def run_validation(model: PPO, val_df: pd.DataFrame, vec_norm: Optional["VecNorm
             m = val_env.get_episode_metrics()
             if "error" not in m:
                 all_metrics.append(m)
-                # region agent log
-                _debug_log(
-                    run_id="pre-fix",
-                    hypothesis_id="H5",
-                    location="train_agent.py:RUN_VALIDATION_SLICE",
-                    message="Validation deterministic action/trade summary",
-                    data={
-                        "slice_index": int(slice_idx),
-                        "steps": int(steps),
-                        "action_counts": {str(k): int(v) for k, v in val_action_counts.items()},
-                        "total_trades": int(m.get("total_trades", 0)),
-                        "avg_hold_candles": float(m.get("avg_hold_candles", 0.0)),
-                        "sharpe_ratio": float(m.get("sharpe_ratio", 0.0)),
-                        "total_return_pct": float(m.get("total_return_pct", 0.0)),
-                        "gross_pnl_before_fees_pct": float(m.get("gross_pnl_before_fees_pct", 0.0)),
-                        "fees_paid_pct": float(m.get("fees_paid_pct", 0.0)),
-                        "net_realized_pnl_pct": float(m.get("net_realized_pnl_pct", 0.0)),
-                        "gross_profit_factor": float(m.get("gross_profit_factor", 0.0)),
-                        "net_profit_factor": float(m.get("net_profit_factor", 0.0)),
-                        "gross_expectancy_pct": float(m.get("gross_expectancy_pct", 0.0)),
-                        "net_expectancy_pct": float(m.get("net_expectancy_pct", 0.0)),
-                        "raw_action_distribution": m.get("raw_action_distribution", {}),
-                        "effective_action_distribution": m.get("action_distribution", {}),
-                        "reward_components": m.get("reward_components", {}),
-                        "mean_action_probs": None,
-                        "mean_policy_entropy": None,
-                        "mean_action_probs_steps": 0,
-                        "buy_sell_action_ratio": float(val_action_counts[1] / max(val_action_counts[2], 1)),
-                    },
-                )
-                # endregion
-                # endregion
 
     finally:
         if vec_norm and old_training is not None:
