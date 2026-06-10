@@ -181,6 +181,18 @@ the agreed finish line for the current approach. Remaining honest options:
   3. **Paper-trade the router as-is** to validate the pipeline end-to-end with $0 at risk.
 Reward/gate tuning on the current setup is EXHAUSTED — 20+ runs, every lever, same asymptote.
 
+| 06-10 | fee sweep (p2_8 final) | `fee_sensitivity.py`: policy FIXED, env fee 0.20→0.00% RT | VAL crosses net-profitable at futures-taker 0.10% RT (net PF 1.102) and hits **net PF 1.264 / +0.53% at futures-maker 0.04% RT** (slippage still taker — conservative). TEST stays net-negative even at ZERO fee (net PF 0.894, −0.31%): its gross edge is negative; fees were never the issue there. Trades stable 45.0 across all scenarios. | ✅ fees were the binding constraint on VAL; bear-test gross edge is a separate (regime) problem |
+
+**FEE-SWEEP READ (06-10):** the router was trained and judged at 0.20% RT — an economics
+5× harsher than its real deployment (it needs shorts ⇒ futures anyway, where maker = 0.04% RT,
+and our "limit" orders were actually crossing the spread = taker; MAKER-1 fixes that with
+post-only). At deployment fees the EXISTING model is net-profitable on validation. The 2026
+bear test remains gross-negative at any fee — that is a regime/robustness problem, not an
+economics one, and the model still beats the test's −34% buy&hold by sitting 95% flat.
+Next: (a) sweep the F6 best checkpoint (val Sortino −0.092 vs final −0.94); (b) train at the
+TRUE deployment fee (`--fee-multiplier 0.2` ⇒ 0.02%/side) — selectivity was tuned for fees 5×
+reality, so the policy likely under-trades its edge.
+
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
 **Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
