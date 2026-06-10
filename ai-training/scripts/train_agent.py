@@ -723,6 +723,12 @@ def main():
                         help="F10: if >0, skip opening positions on out-of-distribution candles "
                              "(mean per-feature |z| from the TRAIN distribution > threshold). "
                              "Defends generalization. Try ~2.0-3.0. 0 = off.")
+    parser.add_argument("--fee-rate", type=float, default=None,
+                        help="MAKER-3: override the PER-SIDE fee for train AND val/test envs. "
+                             "Use when the deployment economics differ from the 0.001 default — "
+                             "e.g. 0.0002 for USDT-M futures maker (post-only) fills. Unlike "
+                             "--fee-multiplier (training-only shaping), this changes the REAL "
+                             "fee the run is judged against.")
     parser.add_argument("--feature-scaling", type=str, default="none",
                         choices=["none", "minmax"],
                         help="F5 (Freqtrade data_kitchen): 'minmax' scales every feature to "
@@ -765,6 +771,11 @@ def main():
         ENV_CONFIG["regime_router"] = True
         print(f"[CONFIG] REGIME ROUTER ON → longs only in uptrends, shorts only in "
               f"downtrends (all-weather trend-follower)")
+    if args.fee_rate is not None:
+        ENV_CONFIG["fee_rate"] = args.fee_rate
+        print(f"[CONFIG] fee_rate overridden → {args.fee_rate*100:.4f}%/side "
+              f"({2*args.fee_rate*100:.3f}% round-trip) for train AND val/test — "
+              f"deployment-economics run")
 
     # ── Load Data ─────────────────────────────────────────────────────────────
     print(f"[LOADING] {args.train}")
