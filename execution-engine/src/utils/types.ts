@@ -69,6 +69,10 @@ export const CONFIG = {
   pair:           process.env.TRADING_PAIR ?? "BTC/USDT",
   timeframe:      process.env.TIMEFRAME    ?? "15m",
   windowSize:     parseInt(process.env.WINDOW_SIZE ?? "48", 10),
+  // G2 (feature warmup audit): candles of history the watcher must hold so
+  // live feature values match the training pipeline exactly. Measured with
+  // ai-training/scripts/audit_features.py: 2000 → 0 skewed features.
+  warmupCandles:  parseInt(process.env.WARMUP_CANDLES ?? "2000", 10),
 
   // ── Risk ──────────────────────────────────────────────────────────────────
   stopLossPct:     parseFloat(process.env.STOP_LOSS_PCT      ?? "0.015"),

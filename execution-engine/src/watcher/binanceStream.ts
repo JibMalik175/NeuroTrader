@@ -91,13 +91,35 @@ export class BinanceWatcher extends EventEmitter {
   // ── Buffer Pre-Fill ─────────────────────────────────────────────────────────
 
   private async prefillBuffer(): Promise<void> {
-    const needed = Math.max(CONFIG.windowSize + 50, 300);
-    logger.info(`[Watcher] Pre-filling ${needed} candles...`);
+    // G2 (feature warmup audit): v4 features only match the training pipeline
+    // with >=2000 candles of history — EMA-200, daily MACD (624c) and the
+    // 30-day macro windows (720c) converge slowly. A short buffer silently
+    // feeds the model out-of-distribution observations (train/serve skew).
+    const needed = Math.max(CONFIG.warmupCandles, CONFIG.windowSize + 50);
+    logger.info(`[Watcher] Pre-filling ${needed} candles (paginated)...`);
     try {
-      const raw = await this.exchange.fetchOHLCV(CONFIG.pair, CONFIG.timeframe, undefined, needed);
-      const now  = Date.now();
-      this.buffer = raw.map(this.rawToCandle).filter(c => this.isClosedCandle(c, now));
+      const tfMs   = TF_MS[CONFIG.timeframe] ?? 3_600_000;
+      const now    = Date.now();
+      const all: Candle[] = [];
+      // Binance caps fetchOHLCV at 1000 rows/call — page forward from the oldest
+      let since = now - needed * tfMs;
+      while (all.length < needed) {
+        const raw = await this.exchange.fetchOHLCV(
+          CONFIG.pair, CONFIG.timeframe, since, 1000);
+        if (raw.length === 0) break;
+        const candles = raw.map(this.rawToCandle);
+        // drop overlap with the previous page
+        const lastTs = all.at(-1)?.timestamp ?? -Infinity;
+        all.push(...candles.filter(c => c.timestamp > lastTs));
+        since = (all.at(-1)?.timestamp ?? since) + 1;
+        if (raw.length < 1000) break;  // reached the present
+      }
+      this.buffer = all.filter(c => this.isClosedCandle(c, now));
       this.lastEmittedCandleTs = this.buffer.at(-1)?.timestamp ?? null;
+      if (this.buffer.length < needed) {
+        logger.warn(`[Watcher] Buffer ${this.buffer.length}/${needed} — feature ` +
+                    `values may be warmup-skewed vs training until backfilled`);
+      }
       logger.info(`[Watcher] Buffer ready: ${this.buffer.length} candles`);
     } catch (err) {
       logger.error("[Watcher] Pre-fill failed", { err }); throw err;
@@ -157,7 +179,8 @@ export class BinanceWatcher extends EventEmitter {
 
   private async onClosedCandle(candle: Candle): Promise<void> {
     this.buffer.push(candle);
-    const maxBuf = Math.max(CONFIG.windowSize + 50, 200);
+    // G2: cap must keep the full feature-warmup history, not just the obs window
+    const maxBuf = Math.max(CONFIG.warmupCandles, CONFIG.windowSize + 50);
     if (this.buffer.length > maxBuf) this.buffer.shift();
 
     logger.debug("[Watcher] Candle", { ts: new Date(candle.timestamp).toISOString(), close: candle.close });
