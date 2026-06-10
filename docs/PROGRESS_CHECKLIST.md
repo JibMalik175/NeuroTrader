@@ -90,11 +90,15 @@ env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverag
 gross PF > 1.2 AND net PF > 1.0 across all 3 validation slices, ≥30 trades/slice, beating
 buy-and-hold per regime. Then: ONNX export → feature parity → paper trade (MOCK→PAPER→TESTNET→LIVE).
 
-## Honest status (post-capstone, 2026-06-10)
-**p2_8 regime router = best model of the entire ladder** (val Sharpe −0.94, gross PF 1.386,
-gExp +0.132%/trade ≈ 2× the plain-1h edge) — and it STILL sits under the 0.20% fee bar
-(net PF 0.879 val / 0.60 test). 20+ runs across every lever show gross edge asymptoting
-below fees. Reward/gate tuning is EXHAUSTED. Remaining honest paths: (1) cut the fee bar —
-BNB discount + maker/limit entries would make +0.132% net-positive (execution fix, not model
-fix); (2) F8 transformer or 2017+ data (new information); (3) paper-trade the router to prove
-the pipeline with $0 at risk. Risk $0 until paper trading proves an edge.
+## Honest status (2026-06-10 session 2 — THE FEE REFRAME PAID OFF)
+The fee sweep (`scripts/fee_sensitivity.py`) reframed everything: the router needs shorts ⇒
+deployment = USDT-M futures ⇒ maker fee 0.04% RT, 5× cheaper than the 0.20% we judged at.
+At deployment economics, TWO independent runs' F6 checkpoints are net-profitable on BOTH
+validation AND the −34% bear test:
+  - p2_8 besttrain: VAL net PF 1.657/+1.21% | TEST 1.147/+0.39% (45 val trades)
+  - p2_9 besttrain: VAL net PF 1.441/+1.05% | TEST 1.285/+0.36% (53 val trades)
+Replicated shape, test untouched by checkpoint selection, maker rows conservative (slippage
+still taker). Caveats: ~15-18 trades/slice (deploy bar wants ≥30); final models always
+overfit (use F6 checkpoints only). MAKER-1 (post-only orders) implemented in ccxtClient.
+**Path to money: per-slice deploy-bar check → ONNX export + parity → futures-testnet paper
+trading with USE_MAKER_ORDERS=true. Risk $0 until paper trading confirms.**
