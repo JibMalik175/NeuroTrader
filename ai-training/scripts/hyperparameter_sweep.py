@@ -357,7 +357,13 @@ def create_objective(
         win_rate    = metrics.get("win_rate_pct", 0.0)
         n_trades    = metrics.get("total_trades", 0)
         max_dd      = metrics.get("max_drawdown_pct", 0.0)
-        obj_value   = metrics.get(objective_metric, -99.0)  # F9: the metric we optimize
+        # G6 (Freqtrade hyperopt_loss_profit_drawdown): composite objective —
+        # maximize return while penalizing the drawdown suffered to earn it.
+        # Their default weighs drawdown at ~1:1 against profit; same here.
+        if objective_metric == "profit_drawdown":
+            obj_value = total_ret - max_dd
+        else:
+            obj_value = metrics.get(objective_metric, -99.0)  # F9: the metric we optimize
 
         print(f"\n  ✅ Trial {trial.number} complete ({elapsed:.0f}s)")
         print(f"     Obj[{objective_metric}]: {obj_value:>7.3f} | Sharpe: {sharpe:>7.3f} | "
@@ -552,7 +558,8 @@ Examples:
     parser.add_argument("--n-envs",     type=int, default=4,
                         help="Parallel environments per trial (default: 4)")
     parser.add_argument("--objective",  type=str, default="sortino_ratio",
-                        choices=["sharpe_ratio", "sortino_ratio", "calmar_ratio"],
+                        choices=["sharpe_ratio", "sortino_ratio", "calmar_ratio",
+                                 "profit_drawdown"],
                         help="F9: metric to optimize. Default sortino_ratio (more robust than "
                              "Sharpe for our regime-sensitive, drawdown-prone problem).")
     parser.add_argument("--timeframe",  type=str, default="15m",
