@@ -184,33 +184,44 @@ export class BinanceClient {
     const lotSize = await this.roundToLotSize(size);
     if (lotSize <= 0) throw new Error(`Lot size rounded to zero (requested: ${size})`);
 
-    const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
-    const limitPrice = ticker.ask ?? ticker.last ?? 0;
-    if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
-
-    logger.info(`[Client] 📤 LIMIT BUY | ${lotSize} @ $${limitPrice.toFixed(4)}`);
-
+    // MAKER-1: ticker fetched INSIDE the retry so a post-only rejection
+    // (Binance refuses a LIMIT_MAKER that would cross) re-prices off a fresh
+    // book instead of hammering the same stale price 20 times.
     return this.withRetry(async () => {
-      const order = await this.exchange.createLimitBuyOrder(CONFIG.pair, lotSize, limitPrice);
+      const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
+      // post-only rests at the best BID (passive side) → maker fee, no spread
+      // cost; default crosses at the best ASK for an instant (taker) fill.
+      const limitPrice = (CONFIG.useMakerOrders ? ticker.bid : ticker.ask) ?? ticker.last ?? 0;
+      if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
+
+      logger.info(`[Client] 📤 LIMIT BUY${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
+
+      const order = await this.exchange.createLimitBuyOrder(
+        CONFIG.pair, lotSize, limitPrice,
+        CONFIG.useMakerOrders ? { postOnly: true } : {}
+      );
       return this.waitForLimitFill(order.id, limitPrice, OrderSide.BUY);
     }, ORDER_RETRIES);
   }
 
-  /** Places a LIMIT SELL at the current best-bid. */
+  /** Places a LIMIT SELL at the current best-bid (post-only: best-ask). */
   async limitSell(size: number): Promise<PlacedOrder> {
     if (this.mode !== ExecutionMode.LIVE) return this.mockOrder(OrderSide.SELL, size);
 
     const lotSize = await this.roundToLotSize(size);
     if (lotSize <= 0) throw new Error(`Lot size rounded to zero (requested: ${size})`);
 
-    const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
-    const limitPrice = ticker.bid ?? ticker.last ?? 0;
-    if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
-
-    logger.info(`[Client] 📤 LIMIT SELL | ${lotSize} @ $${limitPrice.toFixed(4)}`);
-
     return this.withRetry(async () => {
-      const order = await this.exchange.createLimitSellOrder(CONFIG.pair, lotSize, limitPrice);
+      const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
+      const limitPrice = (CONFIG.useMakerOrders ? ticker.ask : ticker.bid) ?? ticker.last ?? 0;
+      if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
+
+      logger.info(`[Client] 📤 LIMIT SELL${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
+
+      const order = await this.exchange.createLimitSellOrder(
+        CONFIG.pair, lotSize, limitPrice,
+        CONFIG.useMakerOrders ? { postOnly: true } : {}
+      );
       return this.waitForLimitFill(order.id, limitPrice, OrderSide.SELL);
     }, ORDER_RETRIES);
   }
