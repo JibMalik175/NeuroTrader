@@ -83,6 +83,25 @@ export class RiskManager {
     return { stopLoss, takeProfit };
   }
 
+  /**
+   * G4 (Freqtrade trailing_stop): once profit clears trailingStopOffset,
+   * ratchet the stop to (price × (1 − trailingStopPositive)) — up only,
+   * never down. Mutates position.stopLoss in place; the engine-side exit
+   * check picks it up. Returns true when the stop moved.
+   */
+  updateTrailingStop(position: Position, currentPrice: number): boolean {
+    if (!CONFIG.useTrailingStop) return false;
+    const profit = (currentPrice - position.entryPrice) / position.entryPrice;
+    if (profit < CONFIG.trailingStopOffset) return false;
+    const newStop = currentPrice * (1 - CONFIG.trailingStopPositive);
+    if (newStop > position.stopLoss) {
+      logger.info(`[RiskMgr] G4 trail: stop ${position.stopLoss.toFixed(4)} → ${newStop.toFixed(4)} (profit ${(profit * 100).toFixed(2)}%)`);
+      position.stopLoss = newStop;
+      return true;
+    }
+    return false;
+  }
+
   checkExitConditions(position: Position, currentPrice: number): "TAKE_PROFIT" | "STOP_LOSS" | null {
     if (currentPrice >= position.takeProfit) {
       logger.info(`[RiskMgr] ✅ TP HIT | ${currentPrice.toFixed(4)} >= ${position.takeProfit.toFixed(4)}`);

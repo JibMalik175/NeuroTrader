@@ -153,6 +153,9 @@ export class Executioner {
     if (!this.position) return;
     this.position.unrealizedPnl = (currentPrice - this.position.entryPrice) / this.position.entryPrice;
 
+    // G4: ratchet the trailing stop before checking exits (no-op unless enabled)
+    this.risk.updateTrailingStop(this.position, currentPrice);
+
     const exitReason = this.risk.checkExitConditions(this.position, currentPrice);
     if (exitReason) { await this.closePosition(currentPrice, exitReason); return; }
 

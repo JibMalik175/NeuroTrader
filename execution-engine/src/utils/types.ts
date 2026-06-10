@@ -89,6 +89,14 @@ export const CONFIG = {
     process.env.EFFECTIVE_FEE_RATE ??
     (process.env.USE_BNB_FEE_DISCOUNT === "true" ? "0.00075" : "0.001")
   ),
+  // G4 (Freqtrade trailing_stop): once profit exceeds the offset, ratchet the
+  // stop up behind price to lock gains. OFF by default — the RL model learned
+  // its own exits, and a tight trail would fight them. Intended as a safety
+  // net during paper trading. The on-exchange SL order is NOT moved (it stays
+  // as the catastrophic backstop); trailing exits fire engine-side.
+  useTrailingStop:      process.env.USE_TRAILING_STOP === "true",
+  trailingStopPositive: parseFloat(process.env.TRAILING_STOP_POSITIVE ?? "0.01"),
+  trailingStopOffset:   parseFloat(process.env.TRAILING_STOP_OFFSET   ?? "0.02"),
   // G8: futures leverage. The risk layer has NO liquidation-price handling
   // (no liq monitoring, no margin buffer math), which is safe at 1x — the
   // liquidation price of a 1x position is ~zero/infinity — and reckless
