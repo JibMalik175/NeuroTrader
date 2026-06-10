@@ -100,22 +100,22 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
        pre-paper-trading bug: live watcher buffered 200-300 candles but features need **2000**
        for training parity (<500 can't compute at all). Watcher now paginates prefill to
        `WARMUP_CANDLES` (default 2000). Also hardened add_time_encoding (positional fallback → error).
-- [ ] ⬜ **G3 Funding fees for futures** (exchange.calculate_funding_fees) — our futures-maker
-       plan ignores funding (~0.01%/8h, longs pay in contango, shorts receive). Add a funding
-       column/scenario to fee_sensitivity.py from historical funding rates; verify it doesn't
-       erase the +0.36-0.39% test edge. DO BEFORE paper trading on futures.
-- [ ] ⬜ **G5 Order chasing** (freqtradebot.replace_order / adjust_order_price) — on unfilled
-       post-only entries, re-price to the new best bid/ask on a cadence instead of giving up
-       after 30s. Raises maker fill rate on 1h signals. Upgrade to MAKER-1's fill loop.
-- [ ] ⬜ **G4 Trailing stop / time-based ROI exits** (minimal_roi, custom_stoploss, trailing_stop) —
-       live-engine safety exits that lock in profit. Risk: fights the model's learned exits. Low
-       priority while exit decisions are the model's job.
-- [ ] ⬜ **G6 Hyperopt loss ideas** (profit_drawdown, multi_metric composites) — optional extra
-       `--objective` choices for the sweep. Low priority.
-- [ ] ⬜ **G7 Continual retraining cadence** (FreqAI live_retrain_hours sliding window) — note for
-       the operations runbook: periodic retrain on a schedule once live. Deferred until deployed.
-- [ ] ⬜ **G8 Liquidation-price awareness** (interface.ft_stoploss_reached liq checks) — only
-       matters if futures leverage >1x; at 1x it's near-moot. Park.
+- [x] **G3 Funding fees** — ✅ `scripts/funding_cost_analysis.py` measured REAL rates over our
+       val/test ranges: worst expected drag ~0.008%/trade vs +0.15-0.18% edge (~5% haircut), and
+       shorts RECEIVE positive funding (90% of val period). NOT an edge-killer; no model change.
+- [x] **G5 Order chasing** — ✅ unfilled post-only orders re-place at the fresh best bid/ask up
+       to 6 attempts (~3 min) instead of one 30s window. Partial fills end the chase. Taker
+       path unchanged. (`placeLimitWithChase` in ccxtClient.)
+- [x] **G4 Trailing stop** — ✅ opt-in `USE_TRAILING_STOP` (default OFF — would fight the model's
+       learned exits): profit > 2% offset ratchets an engine-side stop 1% behind price; exchange
+       SL order stays as catastrophic backstop. Paper-trading safety net.
+- [x] **G6 profit_drawdown objective** — ✅ `--objective profit_drawdown` in the sweep
+       (return − maxDD, 1:1), default remains sortino.
+- [x] **G7 Operations runbook** — ✅ `docs/OPERATIONS_RUNBOOK.md`: 2-week sliding-window retrain
+       gated by fee sweep, besttrain-only promotion rule, daily health checks, kill criteria,
+       4-week paper-trading gate.
+- [x] **G8 Leverage guard** — ✅ `LEVERAGE` env (default 1); canOpenPosition() hard-blocks ≠1x
+       until liquidation handling exists.
 
 ### NOT relevant to us (deliberately skipping — don't chase these)
 Exchange abstraction, pairlist managers, Telegram/RPC, the full backtesting engine (we have
