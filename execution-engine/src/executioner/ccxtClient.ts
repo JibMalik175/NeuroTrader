@@ -35,6 +35,10 @@ const GENERAL_RETRIES = 3;
 const RETRY_DELAY_MS  = 1_000;
 const PRICE_DRIFT_PCT = 0.001;   // 0.1% — cancel limit if price drifts this far
 const LIMIT_TIMEOUT   = 30_000;  // 30s hard timeout on limit orders
+// G5 (Freqtrade replace_order): post-only orders that miss re-place at the
+// fresh best bid/ask instead of giving up — each attempt is one LIMIT_TIMEOUT
+// window, so 6 attempts ≈ 3 minutes of chasing on a 1h-candle signal.
+const MAKER_CHASE_ATTEMPTS = 6;
 
 export interface PlacedOrder {
   orderId:    string;
@@ -184,50 +188,70 @@ export class BinanceClient {
    */
   async limitBuy(size: number): Promise<PlacedOrder> {
     if (this.mode !== ExecutionMode.LIVE) return this.mockOrder(OrderSide.BUY, size);
-
     const lotSize = await this.roundToLotSize(size);
     if (lotSize <= 0) throw new Error(`Lot size rounded to zero (requested: ${size})`);
-
-    // MAKER-1: ticker fetched INSIDE the retry so a post-only rejection
-    // (Binance refuses a LIMIT_MAKER that would cross) re-prices off a fresh
-    // book instead of hammering the same stale price 20 times.
-    return this.withRetry(async () => {
-      const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
-      // post-only rests at the best BID (passive side) → maker fee, no spread
-      // cost; default crosses at the best ASK for an instant (taker) fill.
-      const limitPrice = (CONFIG.useMakerOrders ? ticker.bid : ticker.ask) ?? ticker.last ?? 0;
-      if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
-
-      logger.info(`[Client] 📤 LIMIT BUY${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
-
-      const order = await this.exchange.createLimitBuyOrder(
-        CONFIG.pair, lotSize, limitPrice,
-        CONFIG.useMakerOrders ? { postOnly: true } : {}
-      );
-      return this.waitForLimitFill(order.id, limitPrice, OrderSide.BUY);
-    }, ORDER_RETRIES);
+    return this.placeLimitWithChase(OrderSide.BUY, lotSize);
   }
 
   /** Places a LIMIT SELL at the current best-bid (post-only: best-ask). */
   async limitSell(size: number): Promise<PlacedOrder> {
     if (this.mode !== ExecutionMode.LIVE) return this.mockOrder(OrderSide.SELL, size);
-
     const lotSize = await this.roundToLotSize(size);
     if (lotSize <= 0) throw new Error(`Lot size rounded to zero (requested: ${size})`);
+    return this.placeLimitWithChase(OrderSide.SELL, lotSize);
+  }
 
+  /**
+   * One limit attempt at the current book price. MAKER-1: post-only rests on
+   * the passive side (buy@bid, sell@ask) → maker fee, no spread cost; the
+   * default crosses the spread for an instant (taker) fill. Ticker is fetched
+   * INSIDE the retry so a post-only rejection (Binance refuses a LIMIT_MAKER
+   * that would cross) re-prices off a fresh book instead of hammering the
+   * same stale price.
+   */
+  private placeLimitAttempt(side: OrderSide, lotSize: number): Promise<PlacedOrder> {
+    const isBuy = side === OrderSide.BUY;
     return this.withRetry(async () => {
-      const ticker     = await this.exchange.fetchTicker(CONFIG.pair);
-      const limitPrice = (CONFIG.useMakerOrders ? ticker.ask : ticker.bid) ?? ticker.last ?? 0;
+      const ticker = await this.exchange.fetchTicker(CONFIG.pair);
+      const passive = isBuy ? ticker.bid : ticker.ask;
+      const crossing = isBuy ? ticker.ask : ticker.bid;
+      const limitPrice = (CONFIG.useMakerOrders ? passive : crossing) ?? ticker.last ?? 0;
       if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
 
-      logger.info(`[Client] 📤 LIMIT SELL${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
+      logger.info(`[Client] 📤 LIMIT ${side}${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
 
-      const order = await this.exchange.createLimitSellOrder(
-        CONFIG.pair, lotSize, limitPrice,
-        CONFIG.useMakerOrders ? { postOnly: true } : {}
-      );
-      return this.waitForLimitFill(order.id, limitPrice, OrderSide.SELL);
+      const params = CONFIG.useMakerOrders ? { postOnly: true } : {};
+      const order = isBuy
+        ? await this.exchange.createLimitBuyOrder(CONFIG.pair, lotSize, limitPrice, params)
+        : await this.exchange.createLimitSellOrder(CONFIG.pair, lotSize, limitPrice, params);
+      return this.waitForLimitFill(order.id, limitPrice, side);
     }, ORDER_RETRIES);
+  }
+
+  /**
+   * G5 (Freqtrade replace_order): when a post-only order times out or the
+   * price drifts away unfilled, cancel-and-re-place at the NEW best bid/ask
+   * up to MAKER_CHASE_ATTEMPTS times. Raises the maker fill rate without
+   * ever paying taker. Any partial fill ends the chase (the executioner
+   * sizes the position to the actual fill). Taker mode keeps single-attempt
+   * behavior — it crosses the spread, so timeouts are rare.
+   */
+  private async placeLimitWithChase(side: OrderSide, lotSize: number): Promise<PlacedOrder> {
+    const attempts = CONFIG.useMakerOrders ? MAKER_CHASE_ATTEMPTS : 1;
+    let last: PlacedOrder | null = null;
+
+    for (let i = 1; i <= attempts; i++) {
+      last = await this.placeLimitAttempt(side, lotSize);
+      if (last.filledSize > 0) {
+        if (i > 1) logger.info(`[Client] G5 chase filled on attempt ${i}/${attempts}`);
+        return last;
+      }
+      if (i < attempts) {
+        logger.info(`[Client] G5 chase ${i}/${attempts} unfilled — re-pricing at fresh book`);
+      }
+    }
+    logger.warn(`[Client] G5 chase exhausted (${attempts} attempts) — no fill`);
+    return last!;
   }
 
   /** Market orders kept as emergency fallback (kill switch exits, etc.) */
