@@ -205,6 +205,22 @@ at its real deployment economics. Honest caveats before celebrating: (1) 45 val 
 p2_9_makerfee (train AT 0.04% RT — should trade MORE, building sample size), then paper-trade
 the besttrain checkpoint. Deploy bar per-slice check still required before any real money.
 
+| 06-10 | p2_9_makerfee (final) | router config trained AND judged at `--fee-rate 0.0002` (0.04% RT, 300k) | Traded more as predicted (val 45→65, hold 13.2→8.4c) but per-trade edge THINNED (gExp +0.132→+0.035%): final ≈ breakeven val (net PF 1.073/−0.04%), test worse (−0.89%). F6: 200k checkpoint val Sortino **+1.958** — first strongly positive ever — vs final 0.031. | ⚠️ harsh training fee was doing real work as a selectivity teacher; final overfit again |
+| 06-10 | **p2_9 BESTTRAIN sweep** | F6 checkpoint of p2_9, fee sweep | At 0.04% RT maker: **VAL net PF 1.441/+1.05%, TEST net PF 1.285/+0.36%, 53.3 trades** — both splits positive AGAIN. At 0.10% RT: val 1.230/+0.52%, test 1.111/+0.01%. | 🎯 REPLICATION: second independent run, same both-splits-positive shape |
+
+**REPLICATION READ (06-10) — this is no longer one lucky checkpoint.** Two INDEPENDENT
+training runs (different fee regimes, different seeds) both produced F6 checkpoints that are
+net-profitable on BOTH validation and the −34% bear test at futures-maker economics:
+  - p2_8 besttrain: VAL 1.657/+1.21% (45 tr) | TEST 1.147/+0.39%  ← better val
+  - p2_9 besttrain: VAL 1.441/+1.05% (53 tr) | TEST 1.285/+0.36%  ← better test, more trades
+Pattern also consistent: the FINAL model always overfits; the mid-training checkpoint
+generalizes (F6 has now paid for itself 3 runs straight). Train-at-0.20%/deploy-at-0.04%
+asymmetry is fine — the harsh fee teaches selectivity. REMAINING BEFORE MONEY: (1) per-slice
+deploy-bar check (need per-slice net PF, not just means; samples still ~15-18 trades/slice);
+(2) ONNX export + feature parity of a besttrain artifact; (3) PAPER TRADE on futures testnet
+with post-only orders (USE_MAKER_ORDERS=true). Candidate: ensemble of both checkpoints via
+ensemble_predict.py — they agree on shape but err on different splits.
+
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
 **Phase 2.4 verdict — shorting alone is NOT the unlock.** Doubling the action space
