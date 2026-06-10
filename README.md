@@ -1,193 +1,185 @@
-# TradeBot Core — Full Project
+# TradeBot — Deep RL Crypto Trading System
 
-Automated Binance trading bot with a custom-trained Deep Reinforcement
-Learning model, Node.js execution engine, and Next.js command center.
+End-to-end BTC/USDT trading system: a custom Gymnasium environment and
+RecurrentPPO (LSTM) agent trained in Python, exported to ONNX, and served by a
+TypeScript execution engine with layered risk protections and a Next.js
+monitoring dashboard.
 
 ```
 tradebot-core/
-├── ai-training/        ← Python: data pipeline, DRL training, ONNX export
-├── execution-engine/   ← Node.js/TypeScript: live trading engine
+├── ai-training/        ← Python: data pipeline, custom env, DRL training, ONNX export
+├── execution-engine/   ← Node.js/TypeScript: live trading engine (ccxt, Binance)
 └── command-center/     ← Next.js: dashboard, PnL charts, kill switch
 ```
 
 ---
 
-## Full Setup (Run Once)
+## Highlights
+
+**AI / training**
+- Custom `TradingEnv` (Gymnasium): long/short via a 3-action ladder
+  (BUY moves short→flat→long, SELL moves long→flat→short), direction-aware
+  fees/slippage/stop-loss, 1,543-dim observation (32 market features × 48-candle
+  window + 7 portfolio-state features)
+- RecurrentPPO (LSTM, 1.76M params) — chosen over plain PPO by A/B test
+  (PPO's policy collapsed: gross profit factor 0.058 vs 1.006)
+- Selectable reward: dense portfolio-return (`fixb`) or sparse exit-concentrated
+  net-return reward that scores fee-losing scalps negative (anti-churn)
+- Behavior gates, all opt-in and A/B-tested: ADX regime gate, trend-directional
+  gate, regime router (longs in uptrends / shorts in downtrends), entry cooldown,
+  out-of-distribution candle gate (z-score vs train distribution)
+- Walk-forward training with fresh per-window models and VecNormalize stats
+  (no cross-window leakage), best-checkpoint selection by Sortino during
+  training with an overfit report (final-vs-best), 3-slice validation protocol
+- Performance engineering: precomputed numpy feature matrix took `env.step`
+  from 982 → 52,800 steps/s (the LSTM is now the bottleneck, not the env)
+- Tooling: `compare_runs.py` (A/B tables), `fee_sensitivity.py` (profitability
+  vs execution-cost scenarios), Optuna sweeps with selectable
+  Sharpe/Sortino/Calmar objective, throughput benchmark harness
+
+**Execution engine**
+- Layered protections in the risk manager, ported from Freqtrade's design:
+  cooldown after stop-loss, stop-loss-guard (halt after N stops in a window),
+  peak-drawdown halt, low-profit cooloff, daily circuit breaker with UTC reset,
+  kill switch
+- Post-only (maker) order mode: rests orders on the passive side of the book so
+  fills pay maker fees with zero spread-crossing cost
+- Limit orders with drift-cancel and partial-fill handling, LOT_SIZE flooring,
+  BNB fee-discount detection, crash recovery that reconstructs an orphaned
+  position from exchange state, WebSocket user-data stream with REST fallback
+- Strict TypeScript (`tsc --noEmit` clean)
+
+---
+
+## Honest results (methodology over hype)
+
+Every change ships with an A/B run against baselines on out-of-sample data;
+the full experiment ladder (25+ runs) with verdicts lives in
+[docs/CORE_TRAINING_FIX_PLAN.md](docs/CORE_TRAINING_FIX_PLAN.md).
+
+Key finding: judged at spot taker fees (0.20% round-trip), the model's gross
+edge (+0.13–0.21%/trade) never cleared costs. But the strategy requires
+shorting, so deployment targets USDT-M futures — where post-only maker fees are
+0.04% round-trip. Re-evaluated at deployment economics, the two best
+checkpoints are net-profitable on **both** the validation period **and** a
+−34% bear-market test set the model never saw during selection:
+
+| Checkpoint | Validation (net PF / net %) | Bear test (net PF / net %) |
+|---|---|---|
+| regime router @ 0.04% RT | 1.657 / +1.21% | 1.147 / +0.39% |
+| maker-fee retrain @ 0.04% RT | 1.441 / +1.05% | 1.285 / +0.36% |
+
+Caveats are documented alongside the results (thin per-slice trade counts;
+checkpoint selection pressure). **Status: validating via paper trading before
+any real capital.** Current rule: $0 at risk until the paper-trading bar is met.
+
+---
+
+## Setup
 
 ### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- MongoDB (local or Atlas free tier)
-- Binance account (no API keys needed until Phase 3)
+- Python 3.10+, Node.js 18+, MongoDB (local or Atlas free tier)
+- Binance account (API keys only needed for live mode)
 
----
-
-## Implemented Safety & Correctness Fixes
-
-- PAPER mode now simulates balances and market orders; only LIVE mode can place Binance orders.
-- Training saves matching `*_vecnormalize.pkl` files, and ONNX export bakes those normalization stats into the model graph.
-- Walk-forward training reloads VecNormalize stats between windows instead of resetting observation scaling each window.
-- Validation/test predictions use the same VecNormalize observation transform as training.
-- Hourly Sharpe annualization and max drawdown metrics now use mark-to-market portfolio value.
-- The watcher filters out partial candles, keeps at least 200 candles for indicator warmup, and has a safe REST polling fallback interval.
-- Execution has duplicate-entry protection, correct CCXT order status mapping, SL/TP persistence from the closed position snapshot, daily circuit-breaker reset, enum-based SELL signals, config validation, and awaited graceful shutdown on fatal errors.
-
----
-
-## Phase 2 — Train the AI Model
+### Train the model
 
 ```bash
 cd ai-training
 python -m venv venv && venv\Scripts\activate
 pip install -r requirements.txt
 
-# Step 1: Download 2 years of BTC/USDT 1h candles (no API key needed)
-python scripts/fetch_data.py --symbol BTC/USDT --timeframe 1h --days 730
+# 4 years of BTC/USDT 1h candles (no API key needed)
+python scripts/fetch_data.py --symbol BTC/USDT --timeframe 1h --days 1460
 
-# Step 2: Build feature matrix + train/val/test splits
+# Feature matrix + chronological train/val/test split
 python scripts/feature_engineering.py --input data/BTC_USDT_1h.parquet
 
-# Step 3: Train DRL agent (start with 200k steps to test, scale up to 2M+)
-python scripts/train_agent.py `
-  --train data/BTC_USDT_1h_train.parquet `
-  --val   data/BTC_USDT_1h_val.parquet `
-  --test  data/BTC_USDT_1h_test.parquet `
-  --timesteps 500000 --windows 3 --run-name tradebot_ppo
+# Train (current best config: all-weather regime router)
+python scripts/train_agent.py ^
+  --train data/BTC_USDT_1h_train.parquet ^
+  --val   data/BTC_USDT_1h_val.parquet ^
+  --test  data/BTC_USDT_1h_test.parquet ^
+  --timesteps 300000 --windows 1 --recurrent --n-envs 4 ^
+  --candles-per-day 24 --allow-short --reward-mode exit ^
+  --cooldown 12 --regime-router --eval-every 100000 ^
+  --run-name my_run
 
-# Step 4: Export to ONNX
-# Automatically loads models/tradebot_ppo_best_vecnormalize.pkl
-# and bakes observation normalization into the ONNX graph.
-python scripts/export_onnx.py --model models/tradebot_ppo_best.zip
+# Compare against previous runs
+python scripts/compare_runs.py my_run p2_8_regime_router
 
-# Step 5: Copy model into execution engine
-copy models/tradebot_ppo_best.onnx ../execution-engine/src/strategist/models/tradebot.onnx
+# Where does it cross net-profitable as execution costs improve?
+python scripts/fee_sensitivity.py --model models/my_run_window1_besttrain.zip ^
+  --vecnorm models/my_run_window1_besttrain_vecnormalize.pkl ^
+  --val data/BTC_USDT_1h_val.parquet --test data/BTC_USDT_1h_test.parquet
+
+# Export for the execution engine (bakes normalization into the graph)
+python scripts/export_onnx.py --model models/my_run_window1_besttrain.zip
 ```
 
----
-
-## Phase 3 — Run the Execution Engine
+### Run the execution engine
 
 ```bash
 cd execution-engine
-
-# Install dependencies
 npm install
+copy .env.example .env   # set MONGO_URI; Telegram/Discord optional
 
-# Set up your environment
-copy .env.example .env
-# Edit .env — set MONGO_URI, and optionally Telegram keys
-
-# ── Development Progression (ALWAYS follow this order) ──
-
-# 1. MOCK mode — zero API calls, just logs
-npm run mock
-
-# 2. PAPER mode — real market data, virtual $10,000, no real orders
-npm run paper
-
-# 3. LIVE mode — real money (only after paper trading is profitable)
-#    First: get Binance API keys, set in .env, set USE_TESTNET=true initially
-npm start
+# ALWAYS in this order:
+npm run mock    # 1. zero API calls, simulated fills
+npm run paper   # 2. real market data, virtual $10k, no real orders
+npm start       # 3. LIVE — only after paper trading clears the bar
+                #    (start with USE_TESTNET=true)
 ```
 
-### Getting Binance API Keys (for Phase 3)
-1. Log into Binance → Profile → API Management
-2. Create new API key → System Generated
-3. Enable: ✅ Enable Reading, ✅ Enable Spot & Margin Trading
-4. Disable: ❌ Enable Withdrawals (NEVER enable this)
-5. Set IP restriction to your VPS/machine IP
-6. Copy API Key and Secret into `.env`
+Useful `.env` flags: `USE_MAKER_ORDERS=true` (post-only execution),
+`USE_BNB_FEE_DISCOUNT=true`, `EFFECTIVE_FEE_RATE=0.0002`.
 
----
-
-## Phase 4 — Launch the Dashboard
+### Dashboard
 
 ```bash
 cd command-center
-npm install
-
-# Add to .env.local:
-# MONGO_URI=mongodb://localhost:27017/tradebot
-# NEXT_PUBLIC_PAIR=BTC/USDT
-# NEXT_PUBLIC_RISK=2
-# NEXT_PUBLIC_SL=1.5
-# NEXT_PUBLIC_TP=3
-
-npm run dev
-# Open http://localhost:3001
+npm install && npm run dev   # http://localhost:3001
 ```
 
 ---
 
-## Safety Rules (Read Before Going Live)
+## Data flow
+
+```
+Binance WebSocket (REST fallback)
+      │
+      ▼
+  [Watcher]      closed-candle filtering, 200-candle indicator warmup
+      ▼
+  [Strategist]   32-feature × 48-candle observation → ONNX inference
+      ▼            → BUY / SELL / HOLD + confidence
+  [Executioner]  protection gate (cooldown / stoploss-guard / drawdown /
+      │          low-profit) → position sizing → limit or post-only order
+      │          → SL/TP placement → per-tick monitoring → outcome recorded
+      ▼          back into the protections
+  [MongoDB]      trades, signals, snapshots
+      ▼
+  [Dashboard]    equity curve, stats, kill switch
+```
+
+---
+
+## Safety rules
 
 | Rule | Why |
 |---|---|
-| Never enable API Withdrawal permission | Prevents fund theft even if keys leak |
-| Always start with MOCK → PAPER → Testnet → Live | Each stage catches bugs before real money |
-| Keep `MAX_RISK_PER_TRADE` at 1-2% | One bad streak can't blow the account |
-| Monitor the first 48 hours of live trading | Model may behave differently on live data |
-| Set `USE_TESTNET=true` for your first real API test | Binance Testnet uses fake money but real API behavior |
-| Back up your `.env` file securely (not in Git) | Never commit API keys |
+| Never enable API withdrawal permission | Prevents fund theft even if keys leak |
+| MOCK → PAPER → Testnet → Live, in order | Each stage catches bugs before real money |
+| `MAX_RISK_PER_TRADE` stays at 1–2% | One bad streak can't blow the account |
+| Deploy F6 *best checkpoints*, never final models | Final models overfit in 3 of 3 measured runs |
+| Judge models net-of-fees on out-of-sample slices | Gross edge and validation-only wins are mirages |
+| `.env` never committed | API keys stay out of git |
 
 ---
 
-## Data Flow
+## Documentation
 
-```
-Binance WebSocket
-      │
-      ▼
-  [Watcher]  — buffers closed candles with 200-candle indicator warmup
-      │
-      ▼
-  [Strategist]  — builds 18-feature observation tensor
-      │           runs ONNX model inference
-      │           outputs: BUY / SELL / HOLD + confidence
-      │
-      ▼
-  [Executioner]  — validates config and checks confidence threshold
-      │            calculates position size (fixed fractional)
-      │            places market order via CCXT
-      │            sets stop-loss + take-profit levels
-      │            monitors position on every tick
-      │
-      ▼
-  [MongoDB]  ←─── trades, signals, snapshots
-      │
-      ▼
-  [Dashboard]  — equity curve, stats, kill switch
-```
-
----
-
-## Retraining Schedule
-
-```bash
-# Run every 4 weeks to keep the model fresh
-cd ai-training
-python scripts/fetch_data.py --symbol BTC/USDT --timeframe 1h --days 730
-python scripts/feature_engineering.py --input data/BTC_USDT_1h.parquet
-python scripts/train_agent.py --train data/BTC_USDT_1h_train.parquet `
-  --val data/BTC_USDT_1h_val.parquet --timesteps 1000000
-# Saves both the model zip and matching *_vecnormalize.pkl stats
-python scripts/export_onnx.py --model models/tradebot_ppo_best.zip
-copy models/tradebot_ppo_best.onnx ../execution-engine/src/strategist/models/tradebot.onnx
-```
-
----
-
-## Deployment on a VPS (Optional but Recommended)
-
-For 24/7 uptime, deploy the execution engine to a cheap VPS
-(DigitalOcean $6/month, or Hetzner). Choosing a server in Frankfurt
-or Tokyo minimizes latency to Binance's matching engines.
-
-```bash
-# On your VPS
-npm install -g pm2
-cd execution-engine
-npm run build
-pm2 start dist/index.js --name tradebot
-pm2 save && pm2 startup
-```
+| Doc | What's in it |
+|---|---|
+| [docs/PROGRESS_CHECKLIST.md](docs/PROGRESS_CHECKLIST.md) | Current state, feature status, resume guide |
+| [docs/CORE_TRAINING_FIX_PLAN.md](docs/CORE_TRAINING_FIX_PLAN.md) | Full experiment ladder with verdicts |
+| [docs/TRADEBOT_RUNNING_GUIDE.md](docs/TRADEBOT_RUNNING_GUIDE.md) | Operational runbook |
