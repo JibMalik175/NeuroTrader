@@ -181,10 +181,15 @@ def add_time_encoding(df: pd.DataFrame) -> pd.DataFrame:
         hour = ts.dt.hour
         dow  = ts.dt.dayofweek
     else:
-        # If no timestamp available, infer from index position
-        # Assume 1h candles starting from index 0
-        hour = pd.Series(np.arange(len(df)) % 24, index=df.index)
-        dow  = pd.Series((np.arange(len(df)) // 24) % 7, index=df.index)
+        # G2 audit hardening: the old fallback fabricated hour/day from ROW
+        # POSITION (arange % 24) — silently wrong for any frame that doesn't
+        # start at hour 0, and train/serve-skewed for partial buffers. Fail
+        # loud instead: time features need real timestamps.
+        raise ValueError(
+            "add_time_encoding: no datetime index, 'timestamp', or 'open_time' "
+            "column — cannot compute real hour/day-of-week features. "
+            "(Refusing to infer time from row position.)"
+        )
 
     # Cyclical encoding — maps to [-1, 1] range naturally
     df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
@@ -360,7 +365,8 @@ FEATURE_COLS_V4 = FEATURE_COLS_V3 + [
 FEATURE_COLS = FEATURE_COLS_V4
 
 
-def build_features(df: pd.DataFrame, version: str = "v2", candles_per_day: int = 96) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, version: str = "v2", candles_per_day: int = 96,
+                   verbose: bool = True) -> pd.DataFrame:
     """
     Runs the full feature engineering pipeline on a raw OHLCV DataFrame.
     Returns a clean feature DataFrame with no NaN rows.
@@ -376,6 +382,8 @@ def build_features(df: pd.DataFrame, version: str = "v2", candles_per_day: int =
         96 = 15m (default), 24 = 1h, 288 = 5m.
         Used by add_macro_features for correct window sizing.
         Fix 3: this was hardcoded to 96 inside add_macro_features — now explicit.
+    verbose : bool
+        Print the summary block. Disable for programmatic callers (audits, tests).
     """
     df = df.copy()
 
@@ -420,12 +428,21 @@ def build_features(df: pd.DataFrame, version: str = "v2", candles_per_day: int =
     out.dropna(inplace=True)
     warmup_rows = rows_before - len(out)
 
-    print(f"[INFO] Feature matrix shape: {out.shape}")
-    print(f"[INFO] Feature columns ({len(cols)}): {cols}")
-    print(f"[INFO] Date range: {out.index[0]} -> {out.index[-1]}")
-    print(f"[INFO] NaN count: {out.isnull().sum().sum()}")
-    print(f"[INFO] Warmup rows dropped: {warmup_rows} ({warmup_rows / rows_before * 100:.1f}% of raw data) "
-          f"— driven by longest rolling window (EMA-200 or macro features)")
+    # G2 fix: don't crash on an empty result — happens when the input has fewer
+    # rows than the feature warmup (e.g. a live buffer shorter than the longest
+    # rolling window). Callers must check for emptiness.
+    if verbose:
+        print(f"[INFO] Feature matrix shape: {out.shape}")
+        print(f"[INFO] Feature columns ({len(cols)}): {cols}")
+        if out.empty:
+            print(f"[WARN] ALL {rows_before} rows consumed by feature warmup — "
+                  f"input is shorter than the longest rolling window")
+        else:
+            print(f"[INFO] Date range: {out.index[0]} -> {out.index[-1]}")
+            print(f"[INFO] NaN count: {out.isnull().sum().sum()}")
+            print(f"[INFO] Warmup rows dropped: {warmup_rows} "
+                  f"({warmup_rows / rows_before * 100:.1f}% of raw data) "
+                  f"— driven by longest rolling window (EMA-200 or macro features)")
 
     return out
 
