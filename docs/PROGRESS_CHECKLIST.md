@@ -16,6 +16,20 @@ Legend: ✅ done · 🔄 in progress · ⬜ not started · ❌ tried, didn't hel
 
 ---
 
+## Codebase quality pass (2026-06-11) ✅ DONE
+- [x] First-ever clean `tsc --noEmit`: fixed ccxt v4 named-import types + undefined guards
+       (latent NaN risk in stateRecovery trade math); committed package-lock.json + @types/ws
+- [x] Removed 233 lines of per-session debug instrumentation (debug-627897 probes) from
+       trading_env + train_agent; verified by full-episode smoke run
+- [x] `.gitattributes` (LF normalization, binary protection) — no more CRLF warning spam
+- [x] README rewritten: accurate architecture (1,543-dim obs, fresh-per-window VecNormalize,
+       shorting/router/protections/maker), honest-results section, current commands
+- [x] Stale docs (reward_calibration_findings, GODMODE_SRS, training_diagnosis) bannered HISTORICAL
+- [x] requirements.txt: added missing sb3-contrib + optuna (imported but undeclared!), pytest
+- [x] **Test suite**: `ai-training/tests/test_trading_env.py` — 20 invariant tests on synthetic
+       data (fee identity, ladder, gates, stops, scaler, reward modes, metrics contract)
+- [x] GitHub Actions CI: env tests (torch-free, fast) + strict type-check on every push
+
 ## Phase 0 — Speed ✅ DONE
 - [x] Precompute numpy feature matrix in env (`_get_observation` 604µs→1.6µs, 377×)
 - [x] Lazy `_get_info` (trade economics only at episode end) — env.step 982→52,823/s
