@@ -93,6 +93,30 @@ Source analysis in `docs/CORE_TRAINING_FIX_PLAN.md` + memory. Adopt ideas, keep 
        (`--outlier-threshold`, feature_ref plumbed so val/test score against train stats). Gated
        opt-in; not yet A/B'd in a training run.
 
+### Freqtrade deep-dive PASS 2 (2026-06-11) — unmined areas, prioritized for our path
+- [x] **G1 Lookahead-bias audit** (optimize/analysis/lookahead.py idea) — ✅ `scripts/audit_features.py`.
+       VERDICT: all 32 v4 features CLEAN (8 cut points). Our backtests are honest.
+- [x] **G2 Warmup/recursive-bias audit** (recursive.py idea) — ✅ same script. FOUND + FIXED a
+       pre-paper-trading bug: live watcher buffered 200-300 candles but features need **2000**
+       for training parity (<500 can't compute at all). Watcher now paginates prefill to
+       `WARMUP_CANDLES` (default 2000). Also hardened add_time_encoding (positional fallback → error).
+- [ ] ⬜ **G3 Funding fees for futures** (exchange.calculate_funding_fees) — our futures-maker
+       plan ignores funding (~0.01%/8h, longs pay in contango, shorts receive). Add a funding
+       column/scenario to fee_sensitivity.py from historical funding rates; verify it doesn't
+       erase the +0.36-0.39% test edge. DO BEFORE paper trading on futures.
+- [ ] ⬜ **G5 Order chasing** (freqtradebot.replace_order / adjust_order_price) — on unfilled
+       post-only entries, re-price to the new best bid/ask on a cadence instead of giving up
+       after 30s. Raises maker fill rate on 1h signals. Upgrade to MAKER-1's fill loop.
+- [ ] ⬜ **G4 Trailing stop / time-based ROI exits** (minimal_roi, custom_stoploss, trailing_stop) —
+       live-engine safety exits that lock in profit. Risk: fights the model's learned exits. Low
+       priority while exit decisions are the model's job.
+- [ ] ⬜ **G6 Hyperopt loss ideas** (profit_drawdown, multi_metric composites) — optional extra
+       `--objective` choices for the sweep. Low priority.
+- [ ] ⬜ **G7 Continual retraining cadence** (FreqAI live_retrain_hours sliding window) — note for
+       the operations runbook: periodic retrain on a schedule once live. Deferred until deployed.
+- [ ] ⬜ **G8 Liquidation-price awareness** (interface.ft_stoploss_reached liq checks) — only
+       matters if futures leverage >1x; at 1x it's near-moot. Park.
+
 ### NOT relevant to us (deliberately skipping — don't chase these)
 Exchange abstraction, pairlist managers, Telegram/RPC, the full backtesting engine (we have
 env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverage/liquidation
