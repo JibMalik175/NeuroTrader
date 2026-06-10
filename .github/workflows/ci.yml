@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  env-tests:
+    name: TradingEnv invariant tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # The env test suite is deliberately torch-free: TradingEnv only needs
+      # gymnasium/numpy/pandas, so CI stays fast (no 2GB torch download).
+      - run: pip install numpy pandas gymnasium pytest
+      - run: pytest tests/ -q
+        working-directory: ai-training
+
+  typecheck:
+    name: Execution engine type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: execution-engine/package-lock.json
+      - run: npm ci
+        working-directory: execution-engine
+      - run: npx tsc --noEmit
+        working-directory: execution-engine
