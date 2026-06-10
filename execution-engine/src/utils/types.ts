@@ -89,6 +89,13 @@ export const CONFIG = {
     process.env.EFFECTIVE_FEE_RATE ??
     (process.env.USE_BNB_FEE_DISCOUNT === "true" ? "0.00075" : "0.001")
   ),
+  // G8: futures leverage. The risk layer has NO liquidation-price handling
+  // (no liq monitoring, no margin buffer math), which is safe at 1x — the
+  // liquidation price of a 1x position is ~zero/infinity — and reckless
+  // above it. canOpenPosition() hard-blocks any value != 1 until that
+  // handling exists. Do not raise this to "win more"; raise it only after
+  // implementing liquidation awareness (see Freqtrade ft_stoploss_reached).
+  leverage: parseInt(process.env.LEVERAGE ?? "1", 10),
   // MAKER-1: post-only limit orders. Rest on the passive side of the book so
   // every fill pays the MAKER fee with zero spread-crossing cost, at the price
   // of occasionally missing an entry when the market runs away (the fill loop

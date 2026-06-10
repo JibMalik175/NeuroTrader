@@ -171,6 +171,11 @@ export class RiskManager {
     if (this.killed)           return { allowed: false, reason: "kill switch" };
     if (this.dailyLossTripped) return { allowed: false, reason: "daily circuit breaker" };
 
+    // G8: hard-block leverage until liquidation handling exists (see types.ts)
+    if (CONFIG.leverage !== 1) {
+      return { allowed: false, reason: `leverage ${CONFIG.leverage}x unsupported — no liquidation handling implemented` };
+    }
+
     const now = Date.now();
     if (now < this.cooldownUntil) {
       return { allowed: false, reason: `cooldown after stop-loss (${Math.ceil((this.cooldownUntil - now) / 60000)}m left)` };
