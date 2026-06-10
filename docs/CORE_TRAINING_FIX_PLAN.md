@@ -190,8 +190,20 @@ post-only). At deployment fees the EXISTING model is net-profitable on validatio
 bear test remains gross-negative at any fee — that is a regime/robustness problem, not an
 economics one, and the model still beats the test's −34% buy&hold by sitting 95% flat.
 Next: (a) sweep the F6 best checkpoint (val Sortino −0.092 vs final −0.94); (b) train at the
-TRUE deployment fee (`--fee-multiplier 0.2` ⇒ 0.02%/side) — selectivity was tuned for fees 5×
+TRUE deployment fee (`--fee-rate 0.0002`) — selectivity was tuned for fees 5×
 reality, so the policy likely under-trades its edge.
+
+| 06-10 | **fee sweep (p2_8 BESTTRAIN checkpoint)** | F6 best-during-training model, same sweep | **STRONGEST RESULT IN PROJECT HISTORY.** gExp +0.210% clears even the old 0.20% bar. At futures-taker 0.10% RT: VAL net PF 1.451/+0.80%, **TEST net PF 1.033/+0.11% — FIRST TIME BOTH SPLITS NET-POSITIVE.** At futures-maker 0.04%: VAL 1.657/+1.21%, TEST 1.147/+0.39%. 45 val trades. | 🎯 deployable-shaped, but thin samples (15 trades/slice vs 30 bar) |
+
+**BESTTRAIN SWEEP READ (06-10):** F6's checkpoint (picked by val Sortino during training,
+NOT by test) is net-profitable on BOTH validation AND the −34% bear test at futures fees —
+the deploy-bar shape we've been chasing, achieved by the model we ALREADY HAVE once judged
+at its real deployment economics. Honest caveats before celebrating: (1) 45 val trades =
+~15/slice, HALF the ≥30/slice deploy bar — small-sample variance killed us before (p2_6);
+(2) single checkpoint = selection pressure toward val, though test was untouched by selection;
+(3) maker rows assume post-only fills (MAKER-1) on futures. Evidence path forward:
+p2_9_makerfee (train AT 0.04% RT — should trade MORE, building sample size), then paper-trade
+the besttrain checkpoint. Deploy bar per-slice check still required before any real money.
 
 | 06-09 | p2_4_longshort | 1h + `--allow-short` (200k, RecurrentPPO ladder) | WORSE: VAL net −3.45% (130 trades, 11c holds, fees **3.83%**), TEST net −3.35% (92 trades, gross PF 0.93). | ❌ raw shorting CHURNS — fee death, amplified 2× by the doubled action space |
 
