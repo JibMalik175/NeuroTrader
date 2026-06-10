@@ -1,3 +1,8 @@
+> ⚠️ **HISTORICAL (May 30, 2026).** Architecture sections remain accurate, but the
+> training design here predates: the 1h timeframe, FIX-B/exit rewards, shorting via
+> the 3-action ladder, the regime router, and the futures-maker fee reframe. For
+> current state read `PROGRESS_CHECKLIST.md` and `CORE_TRAINING_FIX_PLAN.md`.
+
 # TradeBot God Mode — Software Requirements Specification
 ## Complete System Documentation
 

@@ -1,3 +1,8 @@
+> ⚠️ **HISTORICAL (June 1–5, 2026).** This log ends at Experiment C. The reward has
+> since moved to FIX-B (pure portfolio return) plus a selectable exit-concentrated
+> mode, the timeframe to 1h, and the action space to a long/short ladder. For current
+> state read `PROGRESS_CHECKLIST.md` and `CORE_TRAINING_FIX_PLAN.md`.
+
 # Reward Calibration Research Log
 
 > **Project:** BTC/USDT 15m Trading Bot — RecurrentPPO  

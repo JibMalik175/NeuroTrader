@@ -1,4 +1,7 @@
 ================================================================================
+  !! HISTORICAL (2026-06-01) — describes the old 15m PPO setup. Superseded by
+  !! RecurrentPPO on 1h with the regime router. See PROGRESS_CHECKLIST.md.
+================================================================================
   TRAINING DIAGNOSIS — tradebot_ppo_15m_v4
   Full audit of Window 1 + Window 2 results + root cause analysis
   Date: 2026-06-01
