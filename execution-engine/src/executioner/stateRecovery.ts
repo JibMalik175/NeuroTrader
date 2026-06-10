@@ -15,7 +15,7 @@
  *   4. Return a fully reconstructed Position object (or null if flat)
  */
 
-import ccxt from "ccxt";
+import type { binance as Binance } from "ccxt";
 import { Position, CONFIG, ExecutionMode } from "../utils/types";
 import { logger } from "../utils/logger";
 
@@ -25,7 +25,7 @@ export interface RecoveryResult {
 }
 
 export async function recoverPositionState(
-  exchange: ccxt.binance,
+  exchange: Binance,
   stopLossPct:   number,
   takeProfitPct: number,
 ): Promise<RecoveryResult> {
@@ -61,17 +61,18 @@ export async function recoverPositionState(
     let weightedEntryPrice = 0;
 
     // Iterate oldest→newest so we can accumulate correctly
-    for (const trade of recentTrades.sort((a, b) => a.timestamp - b.timestamp)) {
+    // ccxt types mark trade fields as possibly undefined — default to 0/no-op
+    for (const trade of recentTrades.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))) {
       if (trade.side === "buy") {
         // Accumulate into position
         const prevValue    = weightedEntryPrice * netSize;
-        const tradeValue   = (trade.price) * (trade.amount);
-        netSize           += trade.amount;
+        const tradeValue   = (trade.price ?? 0) * (trade.amount ?? 0);
+        netSize           += trade.amount ?? 0;
         weightedEntryPrice = netSize > 0 ? (prevValue + tradeValue) / netSize : 0;
-        recoveredBuyTime   = trade.timestamp;
+        recoveredBuyTime   = trade.timestamp ?? recoveredBuyTime;
       } else if (trade.side === "sell") {
         // Position was reduced or closed
-        netSize -= trade.amount;
+        netSize -= trade.amount ?? 0;
         if (netSize <= 0) {
           // Position was fully closed — reset
           netSize = 0;

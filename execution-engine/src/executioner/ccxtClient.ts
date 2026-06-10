@@ -22,7 +22,10 @@
  *   Network glitches resolve in 5-15s. 3 retries gave up during them.
  */
 
-import ccxt, { Order } from "ccxt";
+// ccxt v4 exports exchange classes as NAMED exports; `ccxt.binance` only
+// works as a value (via the default-export object), not as a TYPE namespace.
+import { binance as Binance, Order,
+         AuthenticationError, InsufficientFunds, RateLimitExceeded } from "ccxt";
 import { CONFIG, ExecutionMode, OrderSide, OrderStatus } from "../utils/types";
 import { logger }                                         from "../utils/logger";
 import { TTLCache, TTL }                                  from "../utils/ttlCache";
@@ -46,14 +49,14 @@ export interface PlacedOrder {
 }
 
 export class BinanceClient {
-  private exchange:         ccxt.binance;
+  private exchange:         Binance;
   private mode:             ExecutionMode;
   private cache             = new TTLCache<any>();  // GOD-4
   private effectiveFeeRate: number | null = null;   // GOD-3, set in initialize()
 
   constructor() {
     this.mode = CONFIG.executionMode;
-    this.exchange = new ccxt.binance({
+    this.exchange = new Binance({
       apiKey:          CONFIG.apiKey    || undefined,
       secret:          CONFIG.apiSecret || undefined,
       enableRateLimit: true,
@@ -82,7 +85,8 @@ export class BinanceClient {
     if (this.mode === ExecutionMode.MOCK || this.mode === ExecutionMode.PAPER) return 10_000;
     return this.withRetry(async () => {
       const b = await this.exchange.fetchBalance();
-      const v = b.free?.USDT ?? 0;
+      // ccxt types don't expose the currency-keyed dict on Balance
+      const v = (b.free as unknown as Record<string, number | undefined>)?.USDT ?? 0;
       logger.info(`[Client] USDT Balance: ${v.toFixed(2)}`);
       return v;
     }, GENERAL_RETRIES);
@@ -104,7 +108,7 @@ export class BinanceClient {
     if (this.mode !== ExecutionMode.LIVE) return 0;
     return this.withRetry(async () => {
       const b = await this.exchange.fetchBalance();
-      return b.free?.BNB ?? 0;
+      return (b.free as unknown as Record<string, number | undefined>)?.BNB ?? 0;
     }, GENERAL_RETRIES);
   }
 
@@ -357,7 +361,7 @@ export class BinanceClient {
     }
   }
 
-  get rawExchange(): ccxt.binance { return this.exchange; }
+  get rawExchange(): Binance { return this.exchange; }
 
   // ── Retry (GOD: 20 for orders, 3 for general) ────────────────────────────
 
@@ -367,9 +371,9 @@ export class BinanceClient {
       try { return await fn(); }
       catch (err: any) {
         lastErr = err;
-        if (err instanceof ccxt.AuthenticationError) { logger.error("[Client] Auth failed"); throw err; }
-        if (err instanceof ccxt.InsufficientFunds)   { logger.error("[Client] Insufficient funds"); throw err; }
-        if (err instanceof ccxt.RateLimitExceeded)   { logger.warn("[Client] Rate limited — waiting 60s"); await sleep(60_000); continue; }
+        if (err instanceof AuthenticationError) { logger.error("[Client] Auth failed"); throw err; }
+        if (err instanceof InsufficientFunds)   { logger.error("[Client] Insufficient funds"); throw err; }
+        if (err instanceof RateLimitExceeded)   { logger.warn("[Client] Rate limited — waiting 60s"); await sleep(60_000); continue; }
         const delay = Math.min(RETRY_DELAY_MS * attempt, 10_000);
         logger.warn(`[Client] Attempt ${attempt}/${maxRetries}: ${err.message}. Retry in ${delay}ms`);
         await sleep(delay);

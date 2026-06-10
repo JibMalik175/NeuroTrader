@@ -6,7 +6,7 @@
  *        can query instant balances instead of REST polling.
  */
 
-import ccxt             from "ccxt";
+import ccxt, { binance as Binance, OHLCV } from "ccxt";
 import { EventEmitter } from "events";
 import { CONFIG, Candle } from "../utils/types";
 import { logger }         from "../utils/logger";
@@ -19,7 +19,7 @@ const TF_MS: Record<string, number> = {
 };
 
 export class BinanceWatcher extends EventEmitter {
-  private exchange:   ccxt.binance;
+  private exchange:   Binance;
   private buffer:     Candle[]  = [];
   private isRunning:  boolean   = false;
   private reconnects: number    = 0;
@@ -40,13 +40,13 @@ export class BinanceWatcher extends EventEmitter {
         defaultType: "spot",
         ...(CONFIG.useTestnet && { urls: { api: { rest: "https://testnet.binance.vision" } } }),
       },
-    }) as ccxt.binance;
+    }) as Binance;
 
     // GOD-5: create userData stream (starts lazily in start())
     this.userData = new UserDataStream(this.exchange);
   }
 
-  private resolveExchangeClass(): typeof ccxt.binance {
+  private resolveExchangeClass(): typeof Binance {
     try {
       const pro = require("ccxt/pro");
       logger.info("[Watcher] Using ccxt/pro WebSocket client");
@@ -177,8 +177,14 @@ export class BinanceWatcher extends EventEmitter {
     );
   }
 
-  private rawToCandle(raw: number[]): Candle {
-    return { timestamp: raw[0], open: raw[1], high: raw[2], low: raw[3], close: raw[4], volume: raw[5] };
+  // ccxt's OHLCV tuple elements are typed as possibly undefined; live candles
+  // always carry values, so default to 0 (a 0-timestamp candle is dropped by
+  // the lastEmittedCandleTs dedupe in maybeEmitClosedCandle).
+  private rawToCandle(raw: OHLCV): Candle {
+    return {
+      timestamp: raw[0] ?? 0, open: raw[1] ?? 0, high: raw[2] ?? 0,
+      low: raw[3] ?? 0, close: raw[4] ?? 0, volume: raw[5] ?? 0,
+    };
   }
 }
 

@@ -21,7 +21,7 @@
  */
 
 import { EventEmitter } from "events";
-import ccxt             from "ccxt";
+import type { binance as Binance } from "ccxt";
 import WebSocket        from "ws";
 import { CONFIG, ExecutionMode } from "../utils/types";
 import { logger }                from "../utils/logger";
@@ -41,7 +41,7 @@ export interface OrderFillEvent {
 }
 
 export class UserDataStream extends EventEmitter {
-  private exchange:     ccxt.binance;
+  private exchange:     Binance;
   private listenKey:    string | null = null;
   private ws:           WebSocket | null = null;
   private renewTimer:   ReturnType<typeof setInterval> | null = null;
@@ -49,7 +49,7 @@ export class UserDataStream extends EventEmitter {
   private orderFills    = new Map<string, OrderFillEvent>();
   private active        = false;
 
-  constructor(exchange: ccxt.binance) {
+  constructor(exchange: Binance) {
     super();
     this.exchange = exchange;
   }
@@ -97,8 +97,11 @@ export class UserDataStream extends EventEmitter {
 
     try {
       const bal  = await this.exchange.fetchBalance();
-      const free = bal.free?.[asset] ?? 0;
-      this.balances.set(asset, { asset, free, locked: bal.used?.[asset] ?? 0, updatedAt: Date.now() });
+      // ccxt types don't expose the currency-keyed dict on Balance
+      const freeMap = bal.free as unknown as Record<string, number | undefined>;
+      const usedMap = bal.used as unknown as Record<string, number | undefined>;
+      const free = freeMap?.[asset] ?? 0;
+      this.balances.set(asset, { asset, free, locked: usedMap?.[asset] ?? 0, updatedAt: Date.now() });
       return free;
     } catch (err: any) {
       logger.warn(`[UserData] Balance fallback failed: ${err.message}`);
