@@ -135,15 +135,18 @@ LLM agent-team layer (ai_trading_mode, packages/agents). Backlog, prioritized fo
        ping-pong earnings (+3 to +18%) even with slow-enter/fast-exit hysteresis. BTC 1h "flat"
        regimes still trend intrabar. Structural, not tunable — don't revisit without a genuinely
        mean-reverting instrument. Harness kept for future pairs.
-- [ ] ⬜ **H3 Alternative-data features V5** (their social evaluators, made rigorous) — funding
-       rate + open interest histories are backfillable from Binance futures API → features
-       (funding level/momentum, OI change) → A/B retrain. Their Google-Trends/Reddit signals are
-       NOT cleanly backfillable — skip those.
-- [ ] ⬜ **H2 Order-book-aware maker placement** (simple_market_making mode: min/max spread,
-       book distribution) — place inside the spread at a configurable offset instead of AT best
-       bid/ask; reduces adverse selection on our post-only fills. Refine MAKER-1/G5.
-- [ ] ⬜ **H5 LLM analyst, advisory-only** (ai_trading_mode agent teams) — daily report agent
-       reading trades/metrics; NEVER in the trade loop. Optional/fun.
+- [x] ❌ **H3 V5 funding-rate features** — REJECTED by A/B (p3_0_v5_funding vs p2_8/p2_9).
+       Pipeline solid (`build_v5_data.py`: 4,425 events, causal asof-join, OI excluded — only
+       ~30d of OI history exists) but the retrained checkpoint's edge collapsed: gExp +0.054%
+       (vs +0.16-0.21% v4), val net PF 1.017 vs 1.44-1.66, test net% negative. 3 extra feature
+       columns = +144 obs dims of mostly-noise at the same 300k budget. One-seed caveat noted;
+       promotion rule (beat incumbents BOTH splits) decisively failed. V5 data + env support
+       kept for future feature research.
+- [x] **H2 Inside-spread maker placement** — ✅ `MAKER_INSIDE_SPREAD_RATIO` (default 0 = at-touch,
+       cap 0.9): post-only rests partway into the spread for queue priority, tick-snapped.
+- [x] ⏭️ **H5 LLM analyst** — SKIPPED deliberately: novelty, not edge; would add an API key,
+       a dependency and a failure mode for zero measurable PnL. Revisit only post-deployment
+       if log-reading becomes a chore.
 - Skipping deliberately: web/mobile/Telegram UI (command-center exists), profiles/cloud/copy-
   trading, index/basket modes (single pair), their backtest engine, DSL mode, arbitrage
   (multi-exchange), strategy_optimizer (we have Optuna).
