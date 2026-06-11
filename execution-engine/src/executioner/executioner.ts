@@ -70,6 +70,12 @@ export class Executioner {
     }
 
     this.risk.initialize(balance);
+
+    // Write a day-zero snapshot so the dashboard shows the REAL starting
+    // balance immediately (it previously fell back to a hardcoded $10k
+    // until the first trade produced a snapshot — smoke-test find).
+    await this.saveSnapshot();
+
     logger.info(`[Exec] Ready | Mode: ${CONFIG.executionMode}`);
   }
 
