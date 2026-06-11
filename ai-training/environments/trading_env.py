@@ -149,6 +149,15 @@ class TradingEnv(gym.Env):
         "dist_from_high", "macro_trend_sma", "macro_volatility", "macro_obv_ratio"
     ]
 
+    # H3 (OctoBot alt-data idea, made backfillable): V5 = V4 + perpetual
+    # funding-rate positioning features (built by scripts/build_v5_data.py
+    # from Binance fapi history; ffilled 8h→1h AFTER each funding event, so
+    # strictly causal). Open interest deliberately excluded — Binance only
+    # serves ~30 days of OI history, which cannot honestly backfill training.
+    FEATURE_COLS_V5 = FEATURE_COLS_V4 + [
+        "funding_rate", "funding_ma", "funding_z"
+    ]
+
     # Number of portfolio state features appended to the observation
     N_PORTFOLIO_FEATURES = 7
 
@@ -197,8 +206,10 @@ class TradingEnv(gym.Env):
         # Never hardcode this — pass it from ENV_CONFIG to stay in sync with data.
         self.candles_per_day = candles_per_day
 
-        # Validate required columns — auto-detect v1 vs v2 vs v3 vs v4 features
-        if all(col in self.df.columns for col in self.FEATURE_COLS_V4):
+        # Validate required columns — auto-detect v1..v5 features (richest first)
+        if all(col in self.df.columns for col in self.FEATURE_COLS_V5):
+            self._active_features = self.FEATURE_COLS_V5
+        elif all(col in self.df.columns for col in self.FEATURE_COLS_V4):
             self._active_features = self.FEATURE_COLS_V4
         elif all(col in self.df.columns for col in self.FEATURE_COLS_V3):
             self._active_features = self.FEATURE_COLS_V3
