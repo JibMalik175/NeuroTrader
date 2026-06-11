@@ -158,6 +158,16 @@ env-eval + MockBinanceClient), live-bot orchestration (freqtradebot.py), leverag
 
 ---
 
+### Per-slice deploy-bar check (2026-06-12, user-run, deterministic — reproduced identically)
+At 0.04% RT. Trade counts 30-62/slice — the ≥30 leg is MET (earlier "15/slice" worry was wrong:
+the sweep's "45 trades" was the per-slice MEAN). Net PF per slice:
+- p2_8: VAL 0.90 / 1.22 / **2.86** | TEST 1.69 / 0.78 / 0.98 → val mean was carried by slice 3
+- p2_9: VAL 0.75 / 1.96 / 1.61 | TEST 1.74 / 0.64 / 1.48 → more evenly sourced, 4/6 slices pass
+- **Shared weakness: both fail VAL#1 and TEST#2 — a common regime they can't read.**
+- **STRICT BAR: NOT MET for either** (needs net PF>1 on ALL val slices). p2_9 = stronger candidate.
+- Decision: real money stays OFF. Paper trading still justified ($0 risk, tests pipeline + builds
+  live sample); unless testnet surprises positively, candidates are "promising, not proven."
+
 ## Deploy bar (unchanged)
 gross PF > 1.2 AND net PF > 1.0 across all 3 validation slices, ≥30 trades/slice, beating
 buy-and-hold per regime. Then: ONNX export → feature parity → paper trade (MOCK→PAPER→TESTNET→LIVE).
