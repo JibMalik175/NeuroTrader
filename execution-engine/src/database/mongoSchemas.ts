@@ -166,8 +166,34 @@ const tickSchema = new Schema<ITick>(
 // Compound index for upsert queries in binanceStream.ts
 tickSchema.index({ pair: 1, timeframe: 1, timestamp: 1 }, { unique: true });
 
+// ── KillSignal Schema ─────────────────────────────────────────────────────────
+// Written by: command-center /api/kill (the dashboard's red button).
+// Read by: index.ts kill-switch poll. Before this existed the dashboard
+// button wrote documents NOTHING read — a placebo. Found in the pre-paper
+// shakedown.
+
+export interface IKillSignal extends Document {
+  active:      boolean;
+  reason:      string;
+  triggeredBy: string;
+  triggeredAt: Date;
+  clearedAt?:  Date;
+}
+
+const killSignalSchema = new Schema<IKillSignal>(
+  {
+    active:      { type: Boolean, required: true, default: true, index: true },
+    reason:      { type: String,  required: true },
+    triggeredBy: { type: String,  default: "dashboard" },
+    triggeredAt: { type: Date,    default: Date.now },
+    clearedAt:   { type: Date },
+  },
+  { timestamps: true },
+);
+
 // ── Models ────────────────────────────────────────────────────────────────────
 
+export const KillSignal: Model<IKillSignal> = mongoose.models.KillSignal ?? mongoose.model<IKillSignal>("KillSignal", killSignalSchema);
 export const Trade:     Model<ITrade>     = mongoose.models.Trade     ?? mongoose.model<ITrade>("Trade", tradeSchema);
 export const Snapshot:  Model<ISnapshot>  = mongoose.models.Snapshot  ?? mongoose.model<ISnapshot>("Snapshot", snapshotSchema);
 export const SignalLog: Model<ISignalLog> = mongoose.models.SignalLog ?? mongoose.model<ISignalLog>("SignalLog", signalLogSchema);

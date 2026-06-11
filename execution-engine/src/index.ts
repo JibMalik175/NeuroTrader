@@ -19,7 +19,8 @@ import { Executioner }              from "./executioner/executioner";
 import { Notifier }                 from "./utils/notifier";
 import { CONFIG, ExecutionMode, Candle, Signal } from "./utils/types";
 import { logger }                   from "./utils/logger";
-import { Trade }                    from "./database/mongoSchemas";
+import { Trade, KillSignal }        from "./database/mongoSchemas";
+import mongoose                     from "mongoose";
 
 // ── Banner ────────────────────────────────────────────────────────────────────
 
@@ -176,6 +177,20 @@ async function main(): Promise<void> {
       killed:     s.killed,
     });
   }, 60 * 60 * 1000);
+
+  // 7b. Dashboard kill-switch poll. The command-center red button writes a
+  // KillSignal doc to Mongo; before this poll existed NOTHING read it (found
+  // in the pre-paper shakedown). Checks every 15s; no-op when Mongo is down
+  // (Ctrl+C and the risk manager's own halts still work without it).
+  safeInterval(async () => {
+    if (mongoose.connection.readyState < 1) return;
+    if (executioner.sessionSummary.killed) return;
+    const sig = await KillSignal.findOne({ active: true }).sort({ triggeredAt: -1 }).lean();
+    if (sig) {
+      logger.error(`[KillPoll] Dashboard kill switch: ${sig.reason}`);
+      await executioner.emergencyStop(`Dashboard kill: ${sig.reason}`);
+    }
+  }, 15_000);
 
   // 8. Daily summary (GOD-6: was implemented but never wired — now fires every 24h)
   safeInterval(async () => {
