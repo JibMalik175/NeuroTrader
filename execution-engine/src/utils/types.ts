@@ -111,6 +111,14 @@ export const CONFIG = {
   // spread); on USDT-M futures maker is 0.02% vs 0.05% taker — when enabling
   // there, set EFFECTIVE_FEE_RATE to match.
   useMakerOrders: process.env.USE_MAKER_ORDERS === "true",
+  // H2 (OctoBot market-making book distribution): where post-only orders rest.
+  // 0 = AT the best bid/ask (back of that level's queue, best price). 0.5 =
+  // halfway into the spread (price-time priority over the whole level, costs
+  // half the spread). Must stay < 1.0 or the order would cross and be
+  // rejected. Only meaningful with USE_MAKER_ORDERS.
+  makerInsideSpreadRatio: Math.min(
+    parseFloat(process.env.MAKER_INSIDE_SPREAD_RATIO ?? "0"), 0.9
+  ),
 
   // ── Model ─────────────────────────────────────────────────────────────────
   modelPath:      process.env.MODEL_PATH ?? "",

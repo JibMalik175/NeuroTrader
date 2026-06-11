@@ -215,8 +215,23 @@ export class BinanceClient {
       const ticker = await this.exchange.fetchTicker(CONFIG.pair);
       const passive = isBuy ? ticker.bid : ticker.ask;
       const crossing = isBuy ? ticker.ask : ticker.bid;
-      const limitPrice = (CONFIG.useMakerOrders ? passive : crossing) ?? ticker.last ?? 0;
+      let limitPrice = (CONFIG.useMakerOrders ? passive : crossing) ?? ticker.last ?? 0;
       if (limitPrice <= 0) throw new Error("Cannot determine limit price from ticker");
+
+      // H2: optionally step INSIDE the spread for queue priority (still
+      // passive — ratio is capped < 1 so post-only cannot cross). Snap to
+      // the exchange tick via priceToPrecision.
+      const r = CONFIG.makerInsideSpreadRatio;
+      if (CONFIG.useMakerOrders && r > 0 && ticker.bid && ticker.ask && ticker.ask > ticker.bid) {
+        const spread = ticker.ask - ticker.bid;
+        const raw = isBuy ? ticker.bid + r * spread : ticker.ask - r * spread;
+        try {
+          await this.exchange.loadMarkets();
+          limitPrice = parseFloat(String(this.exchange.priceToPrecision(CONFIG.pair, raw)));
+        } catch {
+          limitPrice = raw;  // precision unknown — exchange may round or reject
+        }
+      }
 
       logger.info(`[Client] 📤 LIMIT ${side}${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
 
