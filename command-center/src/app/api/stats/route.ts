@@ -78,17 +78,24 @@ export async function GET(): Promise<NextResponse> {
 
     const totalTrades = trades.length;
 
+    // Shakedown fix: the page expects { stats, equityCurve[{time,balance}],
+    // recentTrades } with display-ready strings — the old flat/numeric shape
+    // rendered as permanent dashes. Shape everything here, once.
     if (totalTrades === 0) {
+      const latest = (await Snapshot.findOne({}).sort({ timestamp: -1 }).lean()) as any;
       return NextResponse.json({
-        balance:      0,
-        totalPnl:     0,
-        winRate:      0,
-        totalTrades:  0,
-        profitFactor: 0,
-        avgWin:       0,
-        avgLoss:      0,
-        trades:       [],
+        stats: {
+          totalTrades:  "0",
+          winRate:      "0.0",
+          totalPnlUsdt: "0.00",
+          profitFactor: "0.00",
+          avgWinPct:    "0.00",
+          avgLossPct:   "0.00",
+          balance:      (latest?.totalBalance ?? 10_000).toFixed(2),
+          inPosition:   latest?.openPosition ?? false,
+        },
         equityCurve:  [],
+        recentTrades: [],
       });
     }
 
@@ -104,8 +111,6 @@ export async function GET(): Promise<NextResponse> {
     const grossLoss   = Math.abs(losses.reduce((sum: number, t: any) => sum + t.pnlUsdt, 0));
 
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
-    const avgWin       = wins.length   > 0 ? grossProfit / wins.length          : 0;
-    const avgLoss      = losses.length > 0 ? grossLoss   / losses.length        : 0;
 
     // ── Equity curve from snapshots ─────────────────────────────────────────
 
@@ -115,25 +120,43 @@ export async function GET(): Promise<NextResponse> {
       .lean();
 
     const equityCurve = snapshots.map((s: any) => ({
-      timestamp: s.timestamp,
-      balance:   s.totalBalance,
-      pnlPct:    s.totalPnlPct,
+      time:    new Date(s.timestamp).toLocaleString("en-GB", {
+                 month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }),
+      balance: s.totalBalance,
     }));
 
     // Latest balance from the most recent snapshot, or compute from trades
     const latestSnapshot = snapshots[snapshots.length - 1] as any;
     const balance = latestSnapshot?.totalBalance ?? 10_000 + totalPnl;
 
+    // avgWin/avgLoss as PERCENT of trade (page label says %), not USDT
+    const avgWinPct  = wins.length   ? wins.reduce((s: number, t: any) => s + (t.pnlPct ?? 0), 0)   / wins.length   * 100 : 0;
+    const avgLossPct = losses.length ? losses.reduce((s: number, t: any) => s + (t.pnlPct ?? 0), 0) / losses.length * 100 : 0;
+
     return NextResponse.json({
-      balance:      Math.round(balance * 100) / 100,
-      totalPnl:     Math.round(totalPnl * 100) / 100,
-      winRate:      Math.round(winRate * 1000) / 1000,
-      totalTrades,
-      profitFactor: Math.round(profitFactor * 100) / 100,
-      avgWin:       Math.round(avgWin * 100) / 100,
-      avgLoss:      Math.round(avgLoss * 100) / 100,
-      trades:       trades.slice(0, 100),   // Cap at 100 for performance
+      stats: {
+        totalTrades:  String(totalTrades),
+        winRate:      (winRate * 100).toFixed(1),
+        totalPnlUsdt: totalPnl.toFixed(2),
+        profitFactor: Number.isFinite(profitFactor) ? profitFactor.toFixed(2) : "∞",
+        avgWinPct:    avgWinPct.toFixed(2),
+        avgLossPct:   avgLossPct.toFixed(2),
+        balance:      balance.toFixed(2),
+        inPosition:   latestSnapshot?.openPosition ?? false,
+      },
       equityCurve,
+      recentTrades: trades.slice(0, 100).map((t: any) => ({
+        id:         String(t._id),
+        pair:       t.pair,
+        side:       t.side ?? "buy",
+        entryPrice: t.entryPrice,
+        exitPrice:  t.exitPrice,
+        pnlPct:     ((t.pnlPct ?? 0) * 100).toFixed(3),
+        pnlUsdt:    (t.pnlUsdt ?? 0).toFixed(2),
+        exitReason: t.exitReason ?? "?",
+        exitTime:   t.exitTime ? new Date(t.exitTime).toLocaleString("en-GB", {
+                      month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—",
+      })),
     });
 
   } catch (err: any) {
