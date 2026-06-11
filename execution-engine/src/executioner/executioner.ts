@@ -13,6 +13,7 @@ import { BinanceClient }         from "./ccxtClient";
 import { logger }                from "../utils/logger";
 import { Trade, Snapshot, SignalLog } from "../database/mongoSchemas";
 import { Notifier }              from "../utils/notifier";
+import { journal }               from "../utils/decisionJournal";
 import { recoverPositionState }  from "./stateRecovery";
 
 export class Executioner {
@@ -78,6 +79,17 @@ export class Executioner {
     try {
       await this.persistSignal(output, currentPrice);
 
+      // Month-1 audit trail: every model output, acted on or not
+      journal.log("signal", {
+        price: currentPrice,
+        signal: Signal[output.signal],
+        probHold: output.probHold, probBuy: output.probBuy, probSell: output.probSell,
+        confidence: output.confidence,
+        inPosition: !!this.position,
+        unrealizedPnl: this.position?.unrealizedPnl ?? null,
+        balance: this.risk.balance,
+      });
+
       if (this.position) {
         await this.monitorPosition(currentPrice, output);
       } else if (output.signal === Signal.BUY) {
@@ -98,18 +110,24 @@ export class Executioner {
     const gate = this.risk.canOpenPosition();
     if (!gate.allowed) {
       logger.warn(`[Exec] Entry blocked by protection: ${gate.reason}`);
+      journal.log("entry_blocked", { price: currentPrice, reason: gate.reason });
       await this.updateSignalSkipReason(`PROTECTION: ${gate.reason}`);
       return;
     }
 
     if (output.confidence < CONFIG.minConfidence) {
       logger.info(`[Exec] BUY rejected — conf ${(output.confidence*100).toFixed(1)}% < ${(CONFIG.minConfidence*100).toFixed(0)}%`);
+      journal.log("entry_skipped", { price: currentPrice, reason: "LOW_CONFIDENCE", confidence: output.confidence });
       await this.updateSignalSkipReason("LOW_CONFIDENCE");
       return;
     }
 
     const size = this.risk.calculatePositionSize(currentPrice);
-    if (size === 0) { logger.warn("[Exec] Position size = 0 — skipping"); return; }
+    if (size === 0) {
+      logger.warn("[Exec] Position size = 0 — skipping");
+      journal.log("entry_skipped", { price: currentPrice, reason: "ZERO_SIZE" });
+      return;
+    }
 
     logger.info(`[Exec] 🟢 ENTERING`, { price: currentPrice.toFixed(4), size: size.toFixed(6), conf: (output.confidence*100).toFixed(1)+"%" });
 
@@ -140,6 +158,13 @@ export class Executioner {
     this.risk.updateBalance(this.risk.balance - actualPrice * order.filledSize);
 
     this.stopLossOrderId = await this.client.placeStopLossOrder(order.filledSize, stopLoss);
+
+    journal.log("entry", {
+      requestedPrice: currentPrice, fillPrice: actualPrice,
+      size: order.filledSize, isPartial: order.isPartial,
+      stopLoss, takeProfit, confidence: output.confidence,
+      balance: this.risk.balance,
+    });
 
     await this.notifier.sendTradeAlert("BUY", {
       pair: CONFIG.pair, price: actualPrice, size: order.filledSize,
@@ -192,6 +217,13 @@ export class Executioner {
     // F7: feed the protections (stoploss-guard window, low-profit, cooldown-after-stop)
     this.risk.recordTradeOutcome(result);
 
+    journal.log("exit", {
+      entryPrice: result.entryPrice, exitPrice: result.exitPrice,
+      size: result.size, pnlPct: result.pnlPct, pnlUsdt: result.pnlUsdt,
+      feePaid: result.feePaid, durationMs: result.durationMs,
+      exitReason, newBalance,
+    });
+
     this.position = null;
 
     await this.persistTrade(result, closed, order.orderId);
@@ -206,6 +238,7 @@ export class Executioner {
 
   async emergencyStop(reason = "Manual kill switch"): Promise<void> {
     logger.error(`[Exec] 🚨 EMERGENCY STOP: ${reason}`);
+    journal.log("kill", { reason, balance: this.risk.balance });
     this.risk.kill(reason);
     await this.client.cancelAllOrders();
     if (this.position) {
