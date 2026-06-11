@@ -86,6 +86,10 @@ export const CONFIG = {
   // user's deposits/withdrawals/spending never shift its risk math.
   botBudgetUsdt: parseFloat(process.env.BOT_BUDGET_USDT ?? "0"),
 
+  // Starting balance for MOCK/PAPER simulation wallets (USDT). LIVE mode
+  // reads the real wallet (capped by BOT_BUDGET_USDT) and ignores this.
+  initialBalance: parseFloat(process.env.INITIAL_BALANCE ?? "10000"),
+
   // ── Risk ──────────────────────────────────────────────────────────────────
   stopLossPct:     parseFloat(process.env.STOP_LOSS_PCT      ?? "0.015"),
   takeProfitPct:   parseFloat(process.env.TAKE_PROFIT_PCT    ?? "0.03"),

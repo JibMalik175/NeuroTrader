@@ -23,7 +23,7 @@ export class Executioner {
 
   private position:        Position | null = null;
   private stopLossOrderId: string | null   = null;
-  private paperBalance:    number          = 10_000;
+  private paperBalance:    number          = CONFIG.initialBalance;
   private isProcessing:    boolean         = false;
 
   constructor(risk: RiskManager, client: BinanceClient, notifier: Notifier) {
@@ -65,7 +65,7 @@ export class Executioner {
       balance = this.paperBalance;
       logger.info(`[Exec] PAPER MODE | Virtual balance: $${balance.toFixed(2)}`);
     } else {
-      balance = 10_000;
+      balance = CONFIG.initialBalance;
       logger.info("[Exec] MOCK MODE | All orders simulated");
     }
 

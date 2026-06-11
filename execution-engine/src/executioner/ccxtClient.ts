@@ -86,7 +86,7 @@ export class BinanceClient {
   // ── Account ────────────────────────────────────────────────────────────────
 
   async getUsdtBalance(): Promise<number> {
-    if (this.mode === ExecutionMode.MOCK || this.mode === ExecutionMode.PAPER) return 10_000;
+    if (this.mode === ExecutionMode.MOCK || this.mode === ExecutionMode.PAPER) return CONFIG.initialBalance;
     return this.withRetry(async () => {
       const b = await this.exchange.fetchBalance();
       // ccxt types don't expose the currency-keyed dict on Balance
