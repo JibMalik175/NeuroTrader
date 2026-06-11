@@ -44,12 +44,18 @@ FEE_SCENARIOS = [
 N_SLICES = 3
 
 
-def run_agreement_episode(models, vecnorms, env: TradingEnv) -> dict:
-    """One deterministic episode; act only on unanimous actions."""
+def run_agreement_episode(models, vecnorms, env: TradingEnv,
+                          exit_mode: str = "any") -> dict:
+    """
+    One deterministic episode of consensus trading.
+      ENTRIES (from flat): require unanimity — strict, high-conviction only.
+      EXITS (in position): 'any' = close if EITHER model proposes the closing
+        action (slow in, fast out — first run proved unanimous exits over-hold,
+        avg hold 13→25 candles); 'unanimous' = original symmetric gate.
+    """
     obs, _ = env.reset()
     states = [None] * len(models)
     ep_start = np.ones((1,), dtype=bool)
-    agree_steps = total_steps = 0
     done = False
 
     while not done:
@@ -62,17 +68,20 @@ def run_agreement_episode(models, vecnorms, env: TradingEnv) -> dict:
         ep_start = np.zeros((1,), dtype=bool)
 
         unanimous = all(a == actions[0] for a in actions)
-        final = actions[0] if unanimous else 0  # disagreement → HOLD
-        if unanimous and actions[0] != 0:
-            agree_steps += 1
-        total_steps += 1
+        pos = env.position_dir  # 0 flat, +1 long, -1 short
+        if pos == 0:
+            final = actions[0] if unanimous else 0
+        else:
+            closing = 2 if pos == 1 else 1  # long closes via SELL, short via BUY
+            if exit_mode == "any" and closing in actions:
+                final = closing
+            else:
+                final = actions[0] if unanimous else 0
 
         obs, _, term, trunc, _ = env.step(final)
         done = term or trunc
 
-    m = env.get_episode_metrics()
-    m["agree_nonhold_steps"] = agree_steps
-    return m
+    return env.get_episode_metrics()
 
 
 def eval_split(models, vecnorms, df: pd.DataFrame) -> dict:
@@ -83,7 +92,7 @@ def eval_split(models, vecnorms, df: pd.DataFrame) -> dict:
     all_m = []
     for s in slices:
         env = TradingEnv(s, **ENV_CONFIG)
-        m = run_agreement_episode(models, vecnorms, env)
+        m = run_agreement_episode(models, vecnorms, env, exit_mode="any")
         if "error" not in m:
             all_m.append(m)
     keys = ["total_trades", "net_profit_factor", "gross_profit_factor",
@@ -151,3 +160,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

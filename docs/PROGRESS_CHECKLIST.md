@@ -123,9 +123,12 @@ OctoBot's identity vs Freqtrade: NON-PREDICTIVE strategy modes (grid, staggered 
 market making, DCA, index) + heterogeneous signal matrix (TA/social/RT evaluators) + new
 LLM agent-team layer (ai_trading_mode, packages/agents). Backlog, prioritized for us:
 
-- [ ] ⬜ **H4 Two-model agreement gate** (their evaluator-matrix idea, applied to our ensemble) —
-       trade only when p2_8 AND p2_9 besttrain checkpoints agree on direction; expect fewer,
-       higher-conviction trades. Pure evaluation with existing artifacts + fee sweep. DO FIRST.
+- [x] ❌ **H4 Two-model agreement gate** — REJECTED, both variants (`scripts/agreement_gate_eval.py`).
+       v1 (unanimous in+out): over-holds when models disagree on exits (13→25c), val net PF 0.75.
+       v2 (consensus-in, any-out): exits too early (5-8c holds), test net PF 0.947 < both solos.
+       Root cause: lockstep consensus puts BOTH LSTMs off their trained trajectory distribution —
+       disagreement is interference, not independent noise. Solo besttrain checkpoints remain the
+       deployment candidates. Don't revisit with recurrent policies.
 - [x] ❌ **H1 Flat-regime grid overlay** — REJECTED by evidence (`scripts/grid_backtest.py`).
        32-config scan (levels 3/5 × spacing 1-2 ATR × threshold × hysteresis): ALL val configs
        net-negative (best −1.30%); breakout liquidation bleed (−4 to −24%) always exceeds
