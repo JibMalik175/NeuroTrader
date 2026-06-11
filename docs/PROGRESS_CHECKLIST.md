@@ -126,9 +126,12 @@ LLM agent-team layer (ai_trading_mode, packages/agents). Backlog, prioritized fo
 - [ ] ⬜ **H4 Two-model agreement gate** (their evaluator-matrix idea, applied to our ensemble) —
        trade only when p2_8 AND p2_9 besttrain checkpoints agree on direction; expect fewer,
        higher-conviction trades. Pure evaluation with existing artifacts + fee sweep. DO FIRST.
-- [ ] ⬜ **H1 Flat-regime grid overlay** (grid/staggered_orders modes) — our router is ~95% flat
-       BY DESIGN; a tight ATR-sized grid could monetize the chop it sits out. Gate: only when
-       regime-flat AND model-flat; must prove +EV after maker fees in a backtest harness first.
+- [x] ❌ **H1 Flat-regime grid overlay** — REJECTED by evidence (`scripts/grid_backtest.py`).
+       32-config scan (levels 3/5 × spacing 1-2 ATR × threshold × hysteresis): ALL val configs
+       net-negative (best −1.30%); breakout liquidation bleed (−4 to −24%) always exceeds
+       ping-pong earnings (+3 to +18%) even with slow-enter/fast-exit hysteresis. BTC 1h "flat"
+       regimes still trend intrabar. Structural, not tunable — don't revisit without a genuinely
+       mean-reverting instrument. Harness kept for future pairs.
 - [ ] ⬜ **H3 Alternative-data features V5** (their social evaluators, made rigorous) — funding
        rate + open interest histories are backfillable from Binance futures API → features
        (funding level/momentum, OI change) → A/B retrain. Their Google-Trends/Reddit signals are
