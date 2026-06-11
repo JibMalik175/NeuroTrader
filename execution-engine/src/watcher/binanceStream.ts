@@ -47,14 +47,16 @@ export class BinanceWatcher extends EventEmitter {
   }
 
   private resolveExchangeClass(): typeof Binance {
-    try {
-      const pro = require("ccxt/pro");
-      logger.info("[Watcher] Using ccxt/pro WebSocket client");
+    // Modern ccxt bundles the WebSocket clients as `ccxt.pro` — the old
+    // `require("ccxt/pro")` path no longer resolves, which silently downgraded
+    // us to a REST client whose watchOHLCV() THROWS (smoke-test find).
+    const pro = (ccxt as any).pro;
+    if (pro?.binance) {
+      logger.info("[Watcher] Using ccxt.pro WebSocket client");
       return pro.binance;
-    } catch {
-      logger.warn("[Watcher] ccxt/pro not found — falling back to REST polling");
-      return ccxt.binance;
     }
+    logger.warn("[Watcher] ccxt.pro unavailable — using REST polling");
+    return ccxt.binance;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -101,8 +103,10 @@ export class BinanceWatcher extends EventEmitter {
       const tfMs   = TF_MS[CONFIG.timeframe] ?? 3_600_000;
       const now    = Date.now();
       const all: Candle[] = [];
-      // Binance caps fetchOHLCV at 1000 rows/call — page forward from the oldest
-      let since = now - needed * tfMs;
+      // Binance caps fetchOHLCV at 1000 rows/call — page forward from the
+      // oldest. Overshoot by a few candles so dropping the still-open last
+      // candle doesn't leave us one short of `needed` (cosmetic warning fix).
+      let since = now - (needed + 5) * tfMs;
       while (all.length < needed) {
         const raw = await this.exchange.fetchOHLCV(
           CONFIG.pair, CONFIG.timeframe, since, 1000);
@@ -143,7 +147,10 @@ export class BinanceWatcher extends EventEmitter {
   }
 
   private async watchCandles(): Promise<void> {
-    if (typeof (this.exchange as any).watchOHLCV === "function") {
+    // Capability check via ccxt's `has` map — NOT `typeof`, because the REST
+    // client inherits a watchOHLCV() that exists but throws NotSupported,
+    // which made the REST fallback below unreachable (smoke-test find).
+    if ((this.exchange as any).has?.["watchOHLCV"]) {
       while (!this.killSignal) {
         const candles = await (this.exchange as any).watchOHLCV(CONFIG.pair, CONFIG.timeframe);
         for (const raw of candles) {
