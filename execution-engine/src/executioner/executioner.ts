@@ -41,6 +41,14 @@ export class Executioner {
     if (CONFIG.executionMode === ExecutionMode.LIVE) {
       balance = await this.client.getUsdtBalance();
 
+      // Bot allowance: size trades from the bot's own budget, never the whole
+      // wallet — the user's deposits/spending on the same account must not
+      // shift the bot's risk math. 0 = full wallet (legacy behavior).
+      if (CONFIG.botBudgetUsdt > 0 && balance > CONFIG.botBudgetUsdt) {
+        logger.info(`[Exec] Bot budget: $${CONFIG.botBudgetUsdt.toFixed(2)} of $${balance.toFixed(2)} wallet`);
+        balance = CONFIG.botBudgetUsdt;
+      }
+
       const recovery = await recoverPositionState(
         this.client.rawExchange, CONFIG.stopLossPct, CONFIG.takeProfitPct,
       );

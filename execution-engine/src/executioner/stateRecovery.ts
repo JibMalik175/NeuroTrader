@@ -38,91 +38,78 @@ export async function recoverPositionState(
   logger.info("[Recovery] Checking Binance for orphaned positions...");
 
   try {
-    // ── Step 1: Check open orders for a resting stop-loss ─────────────────
+    // ── Step 1: Check open orders for a resting BOT stop-loss ─────────────
     const openOrders = await exchange.fetchOpenOrders(CONFIG.pair);
 
-    // A stop-loss-limit SELL order is the fingerprint of an active position
+    // Ownership rule: the bot only claims a position guarded by a stop-loss
+    // carrying ITS clientOrderId prefix. Without this filter, recovery summed
+    // ALL account fills — the user's manual BTC buys would be adopted as a
+    // "bot position" and then managed/SOLD by the bot. A human trading on
+    // the same account must never have their coins claimed.
+    const isBotOrder = (o: any) =>
+      String(o.clientOrderId ?? o.info?.clientOrderId ?? "")
+        .startsWith(CONFIG.botOrderPrefix);
+
     const slOrder = openOrders.find(o =>
       o.side === "sell" &&
-      (o.type === "stop_loss_limit" || o.type === "stop_loss" || o.type === "limit")
+      (o.type === "stop_loss_limit" || o.type === "stop_loss" || o.type === "limit") &&
+      isBotOrder(o)
     );
 
-    // ── Step 2: Find the last BUY fill to reconstruct entry details ────────
-    // Look back up to 50 recent trades to find the fill
-    const recentTrades = await exchange.fetchMyTrades(CONFIG.pair, undefined, 50);
-
-    // Walk backwards — find the most recent BUY that hasn't been offset by a SELL
-    let recoveredBuySize  = 0;
-    let recoveredBuyPrice = 0;
-    let recoveredBuyTime  = 0;
-
-    // Count net position: sum of buys minus sum of sells (in base currency)
-    let netSize = 0;
-    let weightedEntryPrice = 0;
-
-    // Iterate oldest→newest so we can accumulate correctly
-    // ccxt types mark trade fields as possibly undefined — default to 0/no-op
-    for (const trade of recentTrades.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))) {
-      if (trade.side === "buy") {
-        // Accumulate into position
-        const prevValue    = weightedEntryPrice * netSize;
-        const tradeValue   = (trade.price ?? 0) * (trade.amount ?? 0);
-        netSize           += trade.amount ?? 0;
-        weightedEntryPrice = netSize > 0 ? (prevValue + tradeValue) / netSize : 0;
-        recoveredBuyTime   = trade.timestamp ?? recoveredBuyTime;
-      } else if (trade.side === "sell") {
-        // Position was reduced or closed
-        netSize -= trade.amount ?? 0;
-        if (netSize <= 0) {
-          // Position was fully closed — reset
-          netSize = 0;
-          weightedEntryPrice = 0;
-        }
-      }
+    if (openOrders.some(o => o.side === "sell" &&
+        (o.type === "stop_loss_limit" || o.type === "stop_loss") && !isBotOrder(o))) {
+      logger.warn("[Recovery] Found a stop-loss WITHOUT the bot's tag — treating it " +
+                  "as the user's own order, leaving it alone");
     }
 
-    // ── Step 3: Determine if we're actually in a position ─────────────────
-    // Binance minimum tradeable unit for BTC is 0.00001 — use that as floor
-    const MIN_SIZE = 0.00001;
-
-    if (netSize < MIN_SIZE && !slOrder) {
-      logger.info("[Recovery] No open position detected — starting fresh");
+    if (!slOrder) {
+      logger.info("[Recovery] No bot-tagged stop-loss resting — any net BTC on this " +
+                  "account is treated as the USER's holdings, not a bot position");
       return { position: null, stopLossOrderId: null };
     }
 
-    // If we found net exposure but no SL order, the SL may have been filled
-    // (meaning we were stopped out) — treat as flat
-    if (netSize < MIN_SIZE && slOrder) {
-      logger.warn("[Recovery] Found open SL order but no net buy position — cancelling orphaned order");
+    // ── Step 2: Reconstruct the position FROM THE BOT'S OWN SL ORDER ───────
+    // The old code summed the last 50 account fills — which included the
+    // USER's manual trades, polluting both size and entry price. The tagged
+    // SL order is a cleaner source of truth: the bot sized it to its position
+    // (size = remaining amount) and priced it at entry × (1 − stopLossPct)
+    // (entry = stopPrice / (1 − stopLossPct)). Fully ownership-scoped.
+    const MIN_SIZE = 0.00001;  // Binance minimum BTC unit
+
+    const size = slOrder.remaining ?? slOrder.amount ?? 0;
+    const stopPrice = Number(
+      slOrder.stopPrice ?? (slOrder as any).info?.stopPrice ?? slOrder.price ?? 0
+    );
+
+    if (size < MIN_SIZE || stopPrice <= 0) {
+      logger.warn("[Recovery] Bot SL order is malformed/dust — cancelling and starting flat");
       try { await exchange.cancelOrder(slOrder.id, CONFIG.pair); } catch {}
       return { position: null, stopLossOrderId: null };
     }
 
-    // ── Step 4: Reconstruct the Position object ────────────────────────────
-    const entryPrice  = weightedEntryPrice;
-    const stopLoss    = entryPrice * (1 - stopLossPct);
-    const takeProfit  = entryPrice * (1 + takeProfitPct);
+    const entryPrice = stopPrice / (1 - stopLossPct);
+    const takeProfit = entryPrice * (1 + takeProfitPct);
 
     const position: Position = {
       entryPrice,
-      entryTime:     recoveredBuyTime || Date.now(),
-      size:          netSize,
-      stopLoss,
+      entryTime:     slOrder.timestamp ?? Date.now(),
+      size,
+      stopLoss:      stopPrice,
       takeProfit,
       unrealizedPnl: 0,     // will be updated on next candle tick
     };
 
-    logger.warn("[Recovery] ⚠️  RECOVERED ORPHANED POSITION", {
-      entryPrice:  entryPrice.toFixed(4),
-      size:        netSize.toFixed(6),
-      stopLoss:    stopLoss.toFixed(4),
-      takeProfit:  takeProfit.toFixed(4),
-      slOrderId:   slOrder?.id ?? "none (monitoring only)",
+    logger.warn("[Recovery] ⚠️  RECOVERED BOT POSITION (from tagged SL)", {
+      entryPrice: entryPrice.toFixed(4),
+      size:       size.toFixed(6),
+      stopLoss:   stopPrice.toFixed(4),
+      takeProfit: takeProfit.toFixed(4),
+      slOrderId:  slOrder.id,
     });
 
     return {
       position,
-      stopLossOrderId: slOrder?.id ?? null,
+      stopLossOrderId: slOrder.id,
     };
 
   } catch (err: any) {

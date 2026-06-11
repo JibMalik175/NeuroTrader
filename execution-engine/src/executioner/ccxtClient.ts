@@ -235,7 +235,12 @@ export class BinanceClient {
 
       logger.info(`[Client] 📤 LIMIT ${side}${CONFIG.useMakerOrders ? " (post-only)" : ""} | ${lotSize} @ $${limitPrice.toFixed(4)}`);
 
-      const params = CONFIG.useMakerOrders ? { postOnly: true } : {};
+      // Ownership tag: clientOrderId marks this as a BOT order so crash
+      // recovery can distinguish it from the user's manual trades.
+      const params: Record<string, unknown> = {
+        clientOrderId: `${CONFIG.botOrderPrefix}-${side}-${Date.now()}`,
+        ...(CONFIG.useMakerOrders ? { postOnly: true } : {}),
+      };
       const order = isBuy
         ? await this.exchange.createLimitBuyOrder(CONFIG.pair, lotSize, limitPrice, params)
         : await this.exchange.createLimitSellOrder(CONFIG.pair, lotSize, limitPrice, params);
@@ -275,7 +280,8 @@ export class BinanceClient {
     const lotSize = await this.roundToLotSize(size);
     logger.warn(`[Client] MARKET BUY fallback for ${lotSize} — expect slippage`);
     return this.withRetry(async () => {
-      const o = await this.exchange.createMarketBuyOrder(CONFIG.pair, lotSize);
+      const o = await this.exchange.createMarketBuyOrder(CONFIG.pair, lotSize,
+        { clientOrderId: `${CONFIG.botOrderPrefix}-MKT-${Date.now()}` });
       return this.normalizeOrder(o, OrderSide.BUY);
     }, ORDER_RETRIES);
   }
@@ -285,7 +291,8 @@ export class BinanceClient {
     const lotSize = await this.roundToLotSize(size);
     logger.warn(`[Client] MARKET SELL fallback for ${lotSize} — expect slippage`);
     return this.withRetry(async () => {
-      const o = await this.exchange.createMarketSellOrder(CONFIG.pair, lotSize);
+      const o = await this.exchange.createMarketSellOrder(CONFIG.pair, lotSize,
+        { clientOrderId: `${CONFIG.botOrderPrefix}-MKT-${Date.now()}` });
       return this.normalizeOrder(o, OrderSide.SELL);
     }, ORDER_RETRIES);
   }
@@ -347,9 +354,12 @@ export class BinanceClient {
     }
     try {
       const lotSize = await this.roundToLotSize(size);  // GOD-1 on SL too
+      // The TAGGED stop-loss is the ownership marker crash recovery looks
+      // for — a resting SL with our prefix proves the position is the bot's.
       const order   = await this.exchange.createOrder(
         CONFIG.pair, "stop_loss_limit", "sell",
-        lotSize, stopPrice * 0.999, { stopPrice }
+        lotSize, stopPrice * 0.999,
+        { stopPrice, clientOrderId: `${CONFIG.botOrderPrefix}-SL-${Date.now()}` }
       );
       logger.info(`[Client] SL placed | ID: ${order.id} | Stop: $${stopPrice.toFixed(4)}`);
       return order.id;

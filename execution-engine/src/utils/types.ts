@@ -74,6 +74,18 @@ export const CONFIG = {
   // ai-training/scripts/audit_features.py: 2000 → 0 skewed features.
   warmupCandles:  parseInt(process.env.WARMUP_CANDLES ?? "2000", 10),
 
+  // ── Account coexistence (bot + human on one account) ─────────────────────
+  // Every bot order carries this clientOrderId prefix (its name-tag). Crash
+  // recovery only adopts positions guarded by a TAGGED stop-loss order, so
+  // the user's manual BTC buys/sells are never mistaken for bot positions
+  // (before this, recovery summed ALL account fills — it would have adopted
+  // and SOLD the user's personal coins).
+  botOrderPrefix: process.env.BOT_ORDER_PREFIX ?? "TBOT",
+  // Bot's allowance in USDT. 0 = use the wallet's full free balance (old
+  // behavior). Set >0 so the bot sizes trades from ITS budget and the
+  // user's deposits/withdrawals/spending never shift its risk math.
+  botBudgetUsdt: parseFloat(process.env.BOT_BUDGET_USDT ?? "0"),
+
   // ── Risk ──────────────────────────────────────────────────────────────────
   stopLossPct:     parseFloat(process.env.STOP_LOSS_PCT      ?? "0.015"),
   takeProfitPct:   parseFloat(process.env.TAKE_PROFIT_PCT    ?? "0.03"),
