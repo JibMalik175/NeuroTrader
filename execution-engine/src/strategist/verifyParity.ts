@@ -74,14 +74,17 @@ async function runParityCheck(): Promise<void> {
   console.log("=".repeat(60));
 
   // Build the full observation tensor using TypeScript indicators.ts
-  // Use dummy portfolio state (flat, no position)
-  const tensor = buildObservationTensor(
-    candles,
-    false,   // positionHeld
-    0,       // entryPrice
-    10_000,  // peakBalance
-    10_000,  // currentBalance
-  );
+  // Use dummy portfolio state (flat, no position) via the PortfolioState shape
+  const tensor = buildObservationTensor(candles, {
+    positionHeld:       false,
+    entryPrice:         0,
+    positionSizeBtc:    0,
+    balance:            10_000,
+    peakPortfolioValue: 10_000,
+    initialBalance:     10_000,
+    stepsInPosition:    0,
+    stepsSinceTrade:    0,
+  });
 
   const windowSize = candles.length;   // parity test uses all candles as window
   const actual = extractLastCandleFeatures(tensor, windowSize);

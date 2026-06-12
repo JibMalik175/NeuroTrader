@@ -202,12 +202,25 @@ function computeOBV(candles: Candle[]): number[] {
  * Takes a window of candles and returns a flat Float32Array ready
  * for onnxruntime. Shape: [1, windowSize × 18 + 3]
  */
+/**
+ * Live portfolio state — must mirror trading_env._get_observation's seven
+ * appended features EXACTLY (order, normalization, caps). The smoke test
+ * caught the engine sending the legacy 3-feature tail (obs 1539 vs 1543).
+ */
+export interface PortfolioState {
+  positionHeld:       boolean;
+  entryPrice:         number;  // 0 when flat
+  positionSizeBtc:    number;  // BTC units held, 0 when flat
+  stepsInPosition:    number;  // candles since entry, 0 when flat
+  stepsSinceTrade:    number;  // candles since last close (or process start)
+  balance:            number;  // free cash (USDT)
+  peakPortfolioValue: number;  // running max of mark-to-market equity
+  initialBalance:     number;  // CONFIG.initialBalance
+}
+
 export function buildObservationTensor(
-  candles:       Candle[],
-  positionHeld:  boolean,
-  entryPrice:    number,
-  peakBalance:   number,
-  currentBalance: number,
+  candles: Candle[],
+  ps:      PortfolioState,
 ): Float32Array {
   const n = candles.length;
   if (n < EMA_LONG_B) {
@@ -379,17 +392,29 @@ export function buildObservationTensor(
     );
   }
 
-  // ── Portfolio state (3 values appended after feature window) ─────────────
-  const latestPrice   = closes[n - 1];
-  const posHeld       = positionHeld ? 1.0 : 0.0;
-  const unrealized    = positionHeld && entryPrice > 0
-                        ? (latestPrice - entryPrice) / entryPrice
-                        : 0.0;
-  const drawdown      = peakBalance > 0
-                        ? (peakBalance - currentBalance) / peakBalance
-                        : 0.0;
+  // ── Portfolio state (7 values, mirroring trading_env._get_observation) ───
+  const latestPrice = closes[n - 1];
+  const windowSize  = CONFIG.windowSize;
 
-  features.push(posHeld, unrealized, drawdown);
+  // mark-to-market equity = cash + open position value (env: _get_portfolio_value)
+  const portfolioValue = ps.balance +
+    (ps.positionHeld ? ps.positionSizeBtc * latestPrice : 0);
+
+  const posHeld     = ps.positionHeld ? 1.0 : 0.0;
+  const unrealized  = ps.positionHeld
+                      ? (latestPrice - ps.entryPrice) / (ps.entryPrice + 1e-8)
+                      : 0.0;
+  const drawdown    = (ps.peakPortfolioValue - portfolioValue) /
+                      (ps.peakPortfolioValue + 1e-8);
+  const stepsInPos  = ps.positionHeld ? ps.stepsInPosition / windowSize : 0.0;
+  const portReturn  = portfolioValue / ps.initialBalance - 1.0;
+  const posSize     = ps.positionHeld && portfolioValue > 0
+                      ? (ps.positionSizeBtc * latestPrice) / portfolioValue
+                      : 0.0;
+  const stepsSince  = Math.min(ps.stepsSinceTrade / windowSize, 5.0);
+
+  features.push(posHeld, unrealized, drawdown, stepsInPos,
+                portReturn, posSize, stepsSince);
 
   return new Float32Array(features);
 }

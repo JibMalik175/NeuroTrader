@@ -139,10 +139,22 @@ async function main(): Promise<void> {
     notifier.sendAlert(`🤖 TradeBot GOD MODE started\n${CONFIG.pair} | ${CONFIG.executionMode}`);
   });
 
+  // Portfolio-state plumbing for the model's 7 observation features.
+  // peakPV tracks mark-to-market equity highs (resets on restart — the env's
+  // peak also starts fresh each episode, and restarts are journaled).
+  const TF_MS: Record<string, number> = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+  };
+  const tfMs = TF_MS[CONFIG.timeframe] ?? 3_600_000;
+  const processStart = Date.now();
+  let peakPV = 0;
+
   watcher.on("candle", async (candles: Candle[]) => {
     stats.onCandle();
-    const currentPrice = candles.at(-1)!.close;
-    logger.info(`[Loop] Candle ${new Date(candles.at(-1)!.timestamp).toISOString()} | $${currentPrice.toFixed(4)}`);
+    const lastCandle   = candles.at(-1)!;
+    const currentPrice = lastCandle.close;
+    logger.info(`[Loop] Candle ${new Date(lastCandle.timestamp).toISOString()} | $${currentPrice.toFixed(4)}`);
 
     if (!inference.loaded) {
       const pos = executioner.currentPosition;
@@ -153,9 +165,23 @@ async function main(): Promise<void> {
     }
 
     try {
-      const pos    = executioner.currentPosition;
-      const sum    = executioner.sessionSummary;
-      const output = await inference.predict(candles, !!pos, pos?.entryPrice ?? 0, sum.peakBalance, sum.currentBalance);
+      const pos = executioner.currentPosition;
+      const sum = executioner.sessionSummary;
+
+      const pv = sum.currentBalance + (pos ? pos.size * currentPrice : 0);
+      peakPV = Math.max(peakPV, pv);
+      const sinceAnchor = riskManager.lastTradeTime ?? processStart;
+
+      const output = await inference.predict(candles, {
+        positionHeld:       !!pos,
+        entryPrice:         pos?.entryPrice ?? 0,
+        positionSizeBtc:    pos?.size ?? 0,
+        stepsInPosition:    pos ? Math.max(0, Math.floor((lastCandle.timestamp - pos.entryTime) / tfMs)) : 0,
+        stepsSinceTrade:    Math.max(0, Math.floor((lastCandle.timestamp - sinceAnchor) / tfMs)),
+        balance:            sum.currentBalance,
+        peakPortfolioValue: peakPV,
+        initialBalance:     CONFIG.initialBalance,
+      });
       stats.onSignal();
       await executioner.onSignal(output, currentPrice);
     } catch (err: any) {

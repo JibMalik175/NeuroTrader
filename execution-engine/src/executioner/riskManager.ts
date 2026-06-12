@@ -61,6 +61,8 @@ export class RiskManager {
 
   get peak(): number    { return this.peakBalance; }
   get balance(): number { return this.currentBalance; }
+  /** Timestamp of the last closed trade (for steps_since_trade obs feature). */
+  get lastTradeTime(): number | null { return this.recentTrades.at(-1)?.time ?? null; }
 
   calculatePositionSize(entryPrice: number): number {
     if (this.killed || this.dailyLossTripped) return 0;

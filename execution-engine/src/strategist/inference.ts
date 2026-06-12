@@ -25,7 +25,7 @@ import * as ort from "onnxruntime-node";
 import * as path from "path";
 import * as fs from "fs";
 import { Candle, Signal, ModelOutput, CONFIG } from "../utils/types";
-import { buildObservationTensor } from "./indicators";
+import { buildObservationTensor, PortfolioState } from "./indicators";
 import { journal } from "../utils/decisionJournal";
 import { logger } from "../utils/logger";
 
@@ -90,21 +90,13 @@ export class InferenceEngine {
     logger.info(`[Inference] LSTM memory reset (${reason})`);
   }
 
-  async predict(
-    candles:       Candle[],
-    positionHeld:  boolean,
-    entryPrice:    number,
-    peakBalance:   number,
-    balance:       number,
-  ): Promise<ModelOutput> {
+  async predict(candles: Candle[], ps: PortfolioState): Promise<ModelOutput> {
     if (!this.session || !this.isLoaded || !this.h || !this.c) {
       throw new Error("[Inference] Model not loaded. Call load() first.");
     }
 
     // Raw features — the export normalizes internally (VecNormalize baked in)
-    const obsFlat = buildObservationTensor(
-      candles, positionHeld, entryPrice, peakBalance, balance
-    );
+    const obsFlat = buildObservationTensor(candles, ps);
     const obsTensor = new ort.Tensor("float32", obsFlat, [1, obsFlat.length]);
 
     const results = await this.session.run({
