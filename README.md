@@ -1,4 +1,5 @@
 # NueroTrader — Deep RL Crypto Trading System
+(NEURO TRADER IS A PERSONAL PRODUCT , PLEASE RESPECT OWNERSHIP)
 
 End-to-end BTC/USDT trading system: a custom Gymnasium environment and
 RecurrentPPO (LSTM) agent trained in Python, exported to ONNX, and served by a
